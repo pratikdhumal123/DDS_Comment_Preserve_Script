@@ -6,8 +6,8 @@ import os
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "standalone_clone"))
 
-from comment_preserve_publish import _load_auto_heading_baseline, _resolve_auto_heading_title, _resolve_changed_heading_titles, _save_auto_heading_baseline
-from scdp_compare_guard import _find_heading_section_bounds
+from comment_preserve_publish import _ANCHOR_REGION_AUTO_SENTINEL, _FULL_PAGE_AUTO_SENTINEL, _load_auto_heading_baseline, _resolve_auto_heading_title, _resolve_changed_heading_titles, _save_auto_heading_baseline, _select_auto_heading_target, _select_auto_publish_target
+from scdp_compare_guard import _find_anchor_region_bounds, _find_heading_section_bounds
 
 
 class CompareGuardHeadingResolutionTests(unittest.TestCase):
@@ -109,6 +109,68 @@ class CompareGuardHeadingResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolved, ["Fabric Setup"])
 
+    def test_changed_heading_resolution_switches_to_full_page_when_baseline_heading_deleted(self):
+        baseline_markdown = "# Introduction\nOld intro.\n\n# Naming Conventions\nSame text.\n"
+        markdown = "# Naming Conventions\nSame text.\n"
+        storage = "<h1>Introduction</h1><p>Old intro.</p><h1>Naming Conventions</h1><p>Same text.</p>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            md_path = pathlib.Path(temp_dir) / "sample.md"
+            md_path.write_text(markdown, encoding="utf-8")
+
+            resolved = _resolve_changed_heading_titles(
+                str(md_path),
+                storage,
+                split_level=1,
+                baseline_markdown=baseline_markdown,
+            )
+
+        self.assertEqual(resolved, [_FULL_PAGE_AUTO_SENTINEL])
+
+    def test_changed_heading_resolution_switches_to_full_page_when_heading_renamed(self):
+        baseline_markdown = "# Executive Summary\nOld body.\n\n# Naming Conventions\nSame text.\n"
+        markdown = "# Updated Summary\nOld body with local edit.\n\n# Naming Conventions\nSame text.\n"
+        storage = "<h1>Executive Summary</h1><p>Old body.</p><h1>Naming Conventions</h1><p>Same text.</p>"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            md_path = pathlib.Path(temp_dir) / "sample.md"
+            md_path.write_text(markdown, encoding="utf-8")
+
+            resolved = _resolve_changed_heading_titles(
+                str(md_path),
+                storage,
+                split_level=1,
+                baseline_markdown=baseline_markdown,
+            )
+
+        self.assertEqual(resolved, [_FULL_PAGE_AUTO_SENTINEL])
+
+    def test_auto_heading_target_blocks_deleted_or_renamed_full_page_fallback_by_default(self):
+        with self.assertRaises(SystemExit) as context:
+            _select_auto_heading_target([_FULL_PAGE_AUTO_SENTINEL], allow_full_page_fallback=False)
+
+        self.assertIn("Blocked by default", str(context.exception))
+
+    def test_auto_heading_target_requires_opt_in_for_multiple_changed_sections(self):
+        with self.assertRaises(SystemExit) as context:
+            _select_auto_heading_target(["Alpha", "Beta"], allow_full_page_fallback=False)
+
+        self.assertIn("--allow-full-page-fallback", str(context.exception))
+
+    def test_auto_heading_target_allows_explicit_full_page_fallback(self):
+        resolved = _select_auto_heading_target([_FULL_PAGE_AUTO_SENTINEL], allow_full_page_fallback=True)
+
+        self.assertEqual(resolved, _FULL_PAGE_AUTO_SENTINEL)
+
+    def test_auto_publish_target_prefers_anchor_region_when_available(self):
+        resolved = _select_auto_publish_target(
+            [_FULL_PAGE_AUTO_SENTINEL],
+            allow_full_page_fallback=False,
+            anchor_region_available=True,
+        )
+
+        self.assertEqual(resolved, _ANCHOR_REGION_AUTO_SENTINEL)
+
     def test_auto_heading_baseline_reuses_equivalent_copied_markdown_file(self):
         original_markdown = "# Introduction\nSame text.\n\n# Access Polices\nOriginal body.\n"
         copied_markdown = "# Introduction\nSame text.\n\n# Access Polices\nOriginal body.\n"
@@ -134,6 +196,120 @@ class CompareGuardHeadingResolutionTests(unittest.TestCase):
 
         self.assertIsNotNone(payload)
         self.assertEqual(payload.get("page_id"), "470213898")
+
+    def test_auto_heading_baseline_accepts_legacy_unqualified_split_level_keys(self):
+        markdown = "# Intro\n\n## Alpha\nBody a.\n\n# Other\n\n## Beta\nBody b.\n"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            md_path = pathlib.Path(temp_dir) / "workspace-copy.md"
+            other_md_path = pathlib.Path(temp_dir) / "downloads-copy.md"
+            md_path.write_text(markdown, encoding="utf-8")
+            other_md_path.write_text(markdown, encoding="utf-8")
+
+            _save_auto_heading_baseline(
+                temp_dir,
+                "470213899",
+                str(md_path),
+                2,
+                {
+                    "Alpha": "Body a.",
+                    "Beta": "Body b.",
+                },
+            )
+
+            payload = _load_auto_heading_baseline(temp_dir, "470213899", str(other_md_path), 2)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload.get("page_id"), "470213899")
+
+    def test_auto_heading_baseline_path_match_is_case_insensitive_on_windows_paths(self):
+        markdown = "# Intro\n\n## Alpha\nBody a.\n"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            md_path = pathlib.Path(temp_dir) / "sample.md"
+            md_path.write_text(markdown, encoding="utf-8")
+
+            _save_auto_heading_baseline(
+                temp_dir,
+                "470213900",
+                str(md_path).lower(),
+                2,
+                {
+                    "Alpha": "Body a.",
+                },
+            )
+
+            payload = _load_auto_heading_baseline(temp_dir, "470213900", str(md_path).upper(), 2)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload.get("page_id"), "470213900")
+
+    def test_changed_heading_resolution_uses_parent_path_for_duplicate_split_level_titles(self):
+        markdown = "# Alpha\n\n## Overview\nNew alpha overview.\n\n# Beta\n\n## Overview\nOld beta overview.\n"
+        storage = (
+            "<h1>Alpha</h1><h2>Overview</h2><p>Old alpha overview.</p>"
+            "<h1>Beta</h1><h2>Overview</h2><p>Old beta overview.</p>"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            md_path = pathlib.Path(temp_dir) / "sample.md"
+            md_path.write_text(markdown, encoding="utf-8")
+
+            resolved = _resolve_changed_heading_titles(str(md_path), storage, split_level=2)
+
+        self.assertEqual(resolved, ["Alpha > Overview"])
+
+    def test_changed_heading_resolution_ignores_unresolved_legacy_duplicate_titles(self):
+        markdown = (
+            "# Introduction\n\n## References\nUpdated refs.\n\n"
+            "# Alpha\n\n## Overview\nAlpha body.\n\n"
+            "# Beta\n\n## Overview\nBeta body.\n"
+        )
+        baseline_sections_by_title = {
+            "References": "Old refs.",
+            "Overview": "Legacy overview body that cannot disambiguate duplicates.",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            md_path = pathlib.Path(temp_dir) / "sample.md"
+            md_path.write_text(markdown, encoding="utf-8")
+
+            resolved = _resolve_changed_heading_titles(
+                str(md_path),
+                "",
+                split_level=2,
+                baseline_sections_by_title=baseline_sections_by_title,
+            )
+
+        self.assertEqual(resolved, ["Introduction > References"])
+
+    def test_find_heading_section_bounds_accepts_path_qualified_heading(self):
+        storage = (
+            "<h1>Alpha</h1><h2>Overview</h2><p>Alpha body.</p>"
+            "<h1>Beta</h1><h2>Overview</h2><p>Beta body.</p>"
+        )
+
+        bounds = _find_heading_section_bounds(storage, "Beta > Overview", heading_level=2)
+
+        self.assertIsNotNone(bounds)
+        section_html = storage[bounds["heading_start"]:bounds["section_end"]]
+        self.assertIn("Beta body.", section_html)
+        self.assertNotIn("Alpha body.", section_html)
+
+    def test_find_anchor_region_bounds_returns_body_between_anchor_macros(self):
+        storage = (
+            '<p><ac:structured-macro ac:name="anchor"><ac:parameter ac:name="">docautomation_start</ac:parameter></ac:structured-macro></p>'
+            '<h1>Intro</h1><p>Managed body.</p>'
+            '<p><ac:structured-macro ac:name="anchor"><ac:parameter ac:name="">docautomation_end</ac:parameter></ac:structured-macro></p>'
+            '<p>Outside.</p>'
+        )
+
+        bounds = _find_anchor_region_bounds(storage, "docautomation_start", "docautomation_end")
+
+        self.assertIsNotNone(bounds)
+        managed_html = storage[bounds["body_start"]:bounds["section_end"]]
+        self.assertIn("Managed body.", managed_html)
+        self.assertNotIn("Outside.", managed_html)
 
 
 if __name__ == "__main__":

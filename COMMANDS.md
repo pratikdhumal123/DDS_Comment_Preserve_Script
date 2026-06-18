@@ -158,4 +158,26 @@ cd "C:\Task 3\dds_comment_preserve_solution"
   --force-scdp-override `
   --yes-override
 
-  Set-Location "c:\Task 3\dds_comment_preserve_solution"; .\.venv\Scripts\python.exe .\comment_preserve_publish.py --base-url "https://scdp.cisco.com/conf" --page-id "470213898" --md-path "c:\Task 3\dds_comment_preserve_solution\standalone_clone\input\SDD-ACI (4).md" --heading-title auto --compare-mode both --apply --yes --force-scdp-override --yes-override
+## One-Line Apply Template
+
+```powershell
+Set-Location "c:\Task 3\dds_comment_preserve_solution"; .\.venv\Scripts\python.exe .\comment_preserve_publish.py --base-url "https://scdp.cisco.com/conf" --page-id "<PAGE_ID>" --md-path "<MARKDOWN_PATH>" --heading-title auto --compare-mode both --apply --yes --force-scdp-override --yes-override
+```
+
+## One-Line Apply Example
+
+```powershell
+Set-Location "c:\Task 3\dds_comment_preserve_solution"; .\.venv\Scripts\python.exe .\comment_preserve_publish.py --base-url "https://scdp.cisco.com/conf" --page-id "472704916" --md-path "c:\Task 3\dds_comment_preserve_solution\standalone_clone\input\SDD-ACI (9).md" --heading-title auto --compare-mode both --apply --yes --force-scdp-override --yes-override
+```
+
+## One-Line Compare-Only Template
+
+```powershell
+Set-Location "c:\Task 3\dds_comment_preserve_solution"; .\.venv\Scripts\python.exe .\comment_preserve_publish.py --base-url "https://scdp.cisco.com/conf" --page-id "<PAGE_ID>" --md-path "<MARKDOWN_PATH>" --heading-title auto --compare-mode both
+```
+
+## One-Line Compare-Only Example
+
+```powershell
+Set-Location "c:\Task 3\dds_comment_preserve_solution"; .\.venv\Scripts\python.exe .\comment_preserve_publish.py --base-url "https://scdp.cisco.com/conf" --page-id "472704916" --md-path "c:\Task 3\dds_comment_preserve_solution\standalone_clone\input\SDD-ACI (9).md" --heading-title auto --compare-mode both
+```

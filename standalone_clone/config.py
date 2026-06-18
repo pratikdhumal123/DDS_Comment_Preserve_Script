@@ -14,7 +14,7 @@ BASE_URL = "https://scdp.cisco.com/conf"
 #   "bearer" -> use ACCESS_TOKEN only
 #   "basic"  -> use USERNAME/PASSWORD only
 # AUTH_METHOD = "basic"
-AUTH_METHOD = "auto"
+AUTH_METHOD = os.getenv("CONF_AUTH_METHOD", "auto")
 # Your access token (keep this secure!)
 ACCESS_TOKEN = os.getenv("CONF_ACCESS_TOKEN", "")
 # Basic auth credentials (used when AUTH_METHOD is "basic" or fallback in "auto")

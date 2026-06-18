@@ -25,13 +25,6 @@ _FALLBACK_SEARCH_WINDOW = 120
 _MAX_FALLBACK_ANCHOR_CHARS = 220
 _MAX_FALLBACK_ANCHOR_NEWLINES = 3
 _DELETED_COMMENT_ICON_HTML = "&#128172;"
-_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML = "\u200b"
-_FULL_PAGE_AUTO_SENTINEL = "__AUTO_FULL_PAGE__"
-_ANCHOR_REGION_AUTO_SENTINEL = "__AUTO_ANCHOR_REGION__"
-_PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS = 300
-_HEADING_PATH_SEPARATOR = " > "
-_DEFAULT_MANAGED_ANCHOR_START = "docautomation_start"
-_DEFAULT_MANAGED_ANCHOR_END = "docautomation_end"
 
 
 def _bundled_clone_root() -> str:
@@ -283,50 +276,6 @@ def _supplement_markers_from_inline_properties(
         supplemented += 1
 
     return markers, supplemented
-
-
-def _build_top_orphan_markers_from_inline_properties(inline_props: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-    markers: List[Dict[str, Any]] = []
-    seen_refs: set = set()
-    for idx, item in enumerate(inline_props):
-        ref = str(item.get("ref") or "").strip()
-        if not ref or ref in seen_refs:
-            continue
-        seen_refs.add(ref)
-        markers.append(
-            {
-                "ref": ref,
-                "anchor_html": _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML,
-                "full_tag": "",
-                "left_context": "",
-                "right_context": "",
-                "start": idx,
-                "end": idx,
-                "heading_path": [],
-                "orphan_seeded": True,
-            }
-        )
-    return markers
-
-
-def _seed_missing_orphan_markers(
-    existing_markers: List[Dict[str, Any]],
-    inline_props: List[Dict[str, str]],
-) -> Tuple[List[Dict[str, Any]], int]:
-    existing_refs = {str(marker.get("ref") or "").strip() for marker in existing_markers}
-    missing_inline_props = [
-        item
-        for item in inline_props
-        if str(item.get("ref") or "").strip() and str(item.get("ref") or "").strip() not in existing_refs
-    ]
-    if not missing_inline_props:
-        return list(existing_markers), 0
-
-    orphan_markers = _build_top_orphan_markers_from_inline_properties(missing_inline_props)
-    if not orphan_markers:
-        return list(existing_markers), 0
-
-    return list(existing_markers) + orphan_markers, len(orphan_markers)
 
 
 def _iter_json_string_values(value: Any) -> List[str]:
@@ -736,73 +685,57 @@ def _find_heading_section_span(
     if not storage_html or not heading_title:
         return None
 
-    target_path = _split_heading_path(heading_title)
-    target = _normalize_heading_text(target_path[-1] if target_path else heading_title)
+    target = _normalize_heading_text(heading_title)
     if not target:
         return None
 
-    candidates = _iter_heading_candidates(storage_html)
-    if not candidates:
+    heading_re = re.compile(r"<(h[1-6])\b[^>]*>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
+    matches = list(heading_re.finditer(storage_html))
+    if not matches:
         return None
 
-    for idx, candidate in enumerate(candidates):
-        current_level = int(candidate["level"])
+    for idx, match in enumerate(matches):
+        current_level = int(match.group(1)[1:])
         if heading_level is not None and current_level != heading_level:
             continue
-        heading_text = str(candidate["normalized_text"])
+        heading_text = _normalize_heading_text(match.group(2))
         if heading_text != target:
             continue
-        if target_path:
-            candidate_path = [
-                str(item.get("normalized_text") or "")
-                for item in _heading_path_at_index(storage_html, int(candidate["start"]))
-            ]
-            if candidate_path != [_normalize_heading_text(part) for part in target_path]:
-                continue
-        section_start = int(candidate["start"])
+        section_start = match.start()
         section_end = len(storage_html)
-        for later_candidate in candidates[idx + 1:]:
-            later_level = int(later_candidate["level"])
+        for later_match in matches[idx + 1:]:
+            later_level = int(later_match.group(1)[1:])
             if later_level <= current_level:
-                section_end = int(later_candidate["start"])
+                section_end = later_match.start()
                 break
         if section_end <= section_start:
             return None
         return (section_start, section_end)
 
-    relaxed_target = _normalize_heading_text(target_path[-1] if target_path else heading_title, relax=True)
+    relaxed_target = _normalize_heading_text(heading_title, relax=True)
     if not relaxed_target or relaxed_target == target:
         return None
 
-    relaxed_target_path = [_normalize_heading_text(part, relax=True) for part in target_path] if target_path else []
-    relaxed_matches: List[Tuple[int, Dict[str, Any]]] = []
-    for idx, candidate in enumerate(candidates):
-        current_level = int(candidate["level"])
+    relaxed_matches: List[Tuple[int, Any]] = []
+    for idx, match in enumerate(matches):
+        current_level = int(match.group(1)[1:])
         if heading_level is not None and current_level != heading_level:
             continue
-        heading_text = _normalize_heading_text(str(candidate.get("text") or ""), relax=True)
-        if heading_text != relaxed_target:
-            continue
-        if relaxed_target_path:
-            candidate_path = [
-                _normalize_heading_text(str(item.get("text") or ""), relax=True)
-                for item in _heading_path_at_index(storage_html, int(candidate["start"]))
-            ]
-            if candidate_path != relaxed_target_path:
-                continue
-        relaxed_matches.append((idx, candidate))
+        heading_text = _normalize_heading_text(match.group(2), relax=True)
+        if heading_text == relaxed_target:
+            relaxed_matches.append((idx, match))
 
     if len(relaxed_matches) != 1:
         return None
 
-    idx, candidate = relaxed_matches[0]
-    current_level = int(candidate["level"])
-    section_start = int(candidate["start"])
+    idx, match = relaxed_matches[0]
+    current_level = int(match.group(1)[1:])
+    section_start = match.start()
     section_end = len(storage_html)
-    for later_candidate in candidates[idx + 1:]:
-        later_level = int(later_candidate["level"])
+    for later_match in matches[idx + 1:]:
+        later_level = int(later_match.group(1)[1:])
         if later_level <= current_level:
-            section_end = int(later_candidate["start"])
+            section_end = later_match.start()
             break
     if section_end <= section_start:
         return None
@@ -811,111 +744,93 @@ def _find_heading_section_span(
     return None
 
 
-def _normalize_anchor_macro_name(value: str) -> str:
-    return re.sub(r"\s+", " ", html.unescape(str(value or ""))).strip().lower()
-
-
-def _iter_anchor_macro_blocks(storage_html: str) -> List[Dict[str, Any]]:
-    html_text = str(storage_html or "")
-    paragraph_re = re.compile(
-        r"<p\b[^>]*>\s*(<ac:structured-macro\b[^>]*ac:name=(['\"])anchor\2[^>]*>.*?<ac:parameter\b[^>]*>(.*?)</ac:parameter>.*?</ac:structured-macro>)\s*</p>",
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    raw_re = re.compile(
-        r"<ac:structured-macro\b[^>]*ac:name=(['\"])anchor\1[^>]*>.*?<ac:parameter\b[^>]*>(.*?)</ac:parameter>.*?</ac:structured-macro>",
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    blocks: List[Dict[str, Any]] = []
-    for match in paragraph_re.finditer(html_text):
-        blocks.append(
-            {
-                "start": match.start(),
-                "end": match.end(),
-                "anchor_name": _normalize_anchor_macro_name(_html_to_plain_text(match.group(3))),
-            }
-        )
-    if blocks:
-        return blocks
-
-    for match in raw_re.finditer(html_text):
-        blocks.append(
-            {
-                "start": match.start(),
-                "end": match.end(),
-                "anchor_name": _normalize_anchor_macro_name(_html_to_plain_text(match.group(2))),
-            }
-        )
-    return blocks
-
-
-def _find_anchor_region_span(
+def _find_surviving_section_span_from_markers(
     storage_html: str,
-    start_anchor_name: str,
-    end_anchor_name: str,
+    markers: List[Dict[str, Any]],
 ) -> Optional[Tuple[int, int]]:
-    start_name = _normalize_anchor_macro_name(start_anchor_name)
-    end_name = _normalize_anchor_macro_name(end_anchor_name)
-    if not storage_html or not start_name or not end_name:
+    if not storage_html or not markers:
         return None
 
-    blocks = _iter_anchor_macro_blocks(storage_html)
-    start_block = next((block for block in blocks if block.get("anchor_name") == start_name), None)
-    if start_block is None:
+    normalized_paths: List[List[str]] = []
+    for marker in markers:
+        path = [
+            str(item.get("normalized_text") or "").strip()
+            for item in (marker.get("heading_path") or [])
+            if str(item.get("normalized_text") or "").strip()
+        ]
+        if path:
+            normalized_paths.append(path)
+
+    if not normalized_paths:
         return None
 
-    end_block = next(
-        (
-            block
-            for block in blocks
-            if block.get("anchor_name") == end_name and int(block.get("start") or 0) >= int(start_block.get("end") or 0)
-        ),
-        None,
-    )
-    if end_block is None:
+    common_path = list(normalized_paths[0])
+    for path in normalized_paths[1:]:
+        shared_depth = 0
+        max_depth = min(len(common_path), len(path))
+        while shared_depth < max_depth and common_path[shared_depth] == path[shared_depth]:
+            shared_depth += 1
+        common_path = common_path[:shared_depth]
+        if not common_path:
+            return None
+
+    candidates = _iter_heading_candidates(storage_html)
+    if not candidates:
         return None
 
-    return (int(start_block.get("end") or 0), int(end_block.get("start") or 0))
+    current_path: List[Dict[str, Any]] = []
+    best_candidate: Optional[Dict[str, Any]] = None
+    best_depth = 0
+    best_index: Optional[int] = None
+
+    for index, candidate in enumerate(candidates):
+        while current_path and int(current_path[-1]["level"]) >= int(candidate["level"]):
+            current_path.pop()
+        current_path.append(candidate)
+
+        current_normalized = [str(item.get("normalized_text") or "") for item in current_path]
+        max_depth = min(len(current_normalized), len(common_path))
+        matched_depth = 0
+        for depth in range(1, max_depth + 1):
+            if current_normalized[:depth] == common_path[:depth]:
+                matched_depth = depth
+            else:
+                break
+
+        if matched_depth > best_depth:
+            best_depth = matched_depth
+            best_candidate = current_path[matched_depth - 1]
+            best_index = index
+
+    if best_candidate is None or best_index is None:
+        return None
+
+    section_start = int(best_candidate["start"])
+    section_level = int(best_candidate["level"])
+    section_end = len(storage_html)
+    for later_candidate in candidates[best_index + 1:]:
+        if int(later_candidate["level"]) <= section_level:
+            section_end = int(later_candidate["start"])
+            break
+
+    if section_end <= section_start:
+        return None
+    return (section_start, section_end)
 
 
-def _is_anchor_region_target(target: str) -> bool:
-    return str(target or "").strip() == _ANCHOR_REGION_AUTO_SENTINEL
+def _parse_markdown_sections(md_path: str, split_level: int = 1) -> List[Dict[str, str]]:
+    if split_level < 1 or split_level > 6:
+        raise ValueError("split_level must be between 1 and 6")
 
+    with open(md_path, "r", encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
 
-def _find_target_storage_span(
-    storage_html: str,
-    target_title: str,
-    heading_level: Optional[int],
-    anchor_start_name: str,
-    anchor_end_name: str,
-) -> Optional[Tuple[int, int]]:
-    if _is_anchor_region_target(target_title):
-        return _find_anchor_region_span(storage_html, anchor_start_name, anchor_end_name)
-    return _find_heading_section_span(storage_html, target_title, heading_level=heading_level)
-
-
-def _split_heading_path(value: str) -> List[str]:
-    return [part.strip() for part in str(value or "").split(_HEADING_PATH_SEPARATOR) if part.strip()]
-
-
-def _join_heading_path(parts: List[str]) -> str:
-    clean_parts = [str(part or "").strip() for part in parts if str(part or "").strip()]
-    return _HEADING_PATH_SEPARATOR.join(clean_parts)
-
-
-def _section_identifier(section: Dict[str, Any]) -> str:
-    return str(section.get("path_key") or section.get("title") or "").strip()
-
-
-def _parse_markdown_sections_from_lines(lines: List[str], split_level: int, default_title: str) -> List[Dict[str, Any]]:
-    sections: List[Dict[str, Any]] = []
+    sections: List[Dict[str, str]] = []
     current_title: Optional[str] = None
-    current_path: List[str] = []
     current_lines: List[str] = []
     preface: List[str] = []
     in_fenced_code = False
     heading_pattern = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-    heading_stack: List[Tuple[int, str]] = []
 
     for line in lines:
         if re.match(r"^\s*(```|~~~)", line):
@@ -930,31 +845,18 @@ def _parse_markdown_sections_from_lines(lines: List[str], split_level: int, defa
             heading_match = heading_pattern.match(line)
             if heading_match:
                 heading_depth = len(heading_match.group(1))
-                heading_text = heading_match.group(2).strip() or f"Section {len(sections) + 1}"
-                while heading_stack and int(heading_stack[-1][0]) >= heading_depth:
-                    heading_stack.pop()
-                heading_stack.append((heading_depth, heading_text))
-
-                if heading_depth == split_level:
+                if heading_depth != split_level:
                     if current_title is not None:
-                        sections.append(
-                            {
-                                "title": current_title,
-                                "markdown": "\n".join(current_lines).strip(),
-                                "path": list(current_path),
-                                "path_key": _join_heading_path(current_path),
-                            }
-                        )
-
-                    current_title = heading_text
-                    current_path = [item[1] for item in heading_stack]
-                    current_lines = []
+                        current_lines.append(line)
+                    else:
+                        preface.append(line)
                     continue
 
                 if current_title is not None:
-                    current_lines.append(line)
-                else:
-                    preface.append(line)
+                    sections.append({"title": current_title, "markdown": "\n".join(current_lines).strip()})
+
+                current_title = heading_match.group(2).strip() or f"Section {len(sections) + 1}"
+                current_lines = []
                 continue
 
         if current_title is not None:
@@ -963,38 +865,17 @@ def _parse_markdown_sections_from_lines(lines: List[str], split_level: int, defa
             preface.append(line)
 
     if current_title is not None:
-        sections.append(
-            {
-                "title": current_title,
-                "markdown": "\n".join(current_lines).strip(),
-                "path": list(current_path),
-                "path_key": _join_heading_path(current_path),
-            }
-        )
+        sections.append({"title": current_title, "markdown": "\n".join(current_lines).strip()})
 
     if preface and sections:
-        sections[0]["markdown"] = ("\n".join(preface).strip() + "\n\n" + str(sections[0].get("markdown") or "")).strip()
+        sections[0]["markdown"] = ("\n".join(preface).strip() + "\n\n" + sections[0]["markdown"]).strip()
 
     if not sections:
         sections.append(
-            {"title": default_title, "markdown": "\n".join(preface).strip(), "path": [default_title], "path_key": default_title}
+            {"title": os.path.splitext(os.path.basename(md_path))[0] or "Document", "markdown": "\n".join(preface).strip()}
         )
 
     return sections
-
-
-def _parse_markdown_sections(md_path: str, split_level: int = 1) -> List[Dict[str, Any]]:
-    if split_level < 1 or split_level > 6:
-        raise ValueError("split_level must be between 1 and 6")
-
-    with open(md_path, "r", encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-
-    return _parse_markdown_sections_from_lines(
-        lines,
-        split_level=split_level,
-        default_title=os.path.splitext(os.path.basename(md_path))[0] or "Document",
-    )
 
 
 def _markdown_to_plain_text(value: str) -> str:
@@ -1021,32 +902,6 @@ def _normalize_section_body_for_autodetect(value: str, *, is_html: bool) -> str:
     return re.sub(r"\s+", " ", plain).strip().lower()
 
 
-def _deleted_heading_titles(local_titles: List[str], baseline_titles: List[str]) -> List[str]:
-    local_title_set = {str(title or "").strip() for title in local_titles if str(title or "").strip()}
-    return [
-        str(title or "").strip()
-        for title in baseline_titles
-        if str(title or "").strip() and str(title or "").strip() not in local_title_set
-    ]
-
-
-def _extract_storage_heading_titles(storage_html: str, heading_level: int) -> List[str]:
-    return [_section_identifier(section) for section in _extract_storage_sections(storage_html, heading_level)]
-
-
-def _extract_storage_sections(storage_html: str, heading_level: int) -> List[Dict[str, Any]]:
-    sections: List[Dict[str, Any]] = []
-    for candidate in _iter_heading_candidates(storage_html or ""):
-        if int(candidate["level"]) != int(heading_level):
-            continue
-        path = [str(item.get("text") or "").strip() for item in _heading_path_at_index(storage_html, int(candidate["start"]))]
-        title = str(candidate.get("text") or "").strip()
-        if not title:
-            continue
-        sections.append({"title": title, "path": path, "path_key": _join_heading_path(path)})
-    return sections
-
-
 def _resolve_changed_heading_titles_against_markdown(
     md_path: str,
     baseline_markdown: str,
@@ -1054,24 +909,23 @@ def _resolve_changed_heading_titles_against_markdown(
 ) -> List[str]:
     sections = _parse_markdown_sections(md_path, split_level=split_level)
     baseline_sections = _parse_markdown_sections_from_text(baseline_markdown, split_level=split_level)
-    local_titles = [_section_identifier(section) for section in sections if _section_identifier(section)]
-    baseline_titles = [
-        _section_identifier(section)
+    baseline_by_title = {
+        str(section.get("title") or "").strip(): section
         for section in baseline_sections
-        if _section_identifier(section)
-    ]
-    if _deleted_heading_titles(local_titles, baseline_titles):
-        return [_FULL_PAGE_AUTO_SENTINEL]
-    baseline_by_title = {_section_identifier(section): section for section in baseline_sections if _section_identifier(section)}
+        if str(section.get("title") or "").strip()
+    }
     changed_titles: List[str] = []
+    local_titles = {
+        str(section.get("title") or "").strip()
+        for section in sections
+        if str(section.get("title") or "").strip()
+    }
 
     for section in sections:
-        title = _section_identifier(section)
+        title = str(section.get("title") or "").strip()
         if not title:
             continue
         baseline_section = baseline_by_title.get(title)
-        if baseline_section is None and str(section.get("title") or "").strip() != title:
-            baseline_section = baseline_by_title.get(str(section.get("title") or "").strip())
         if baseline_section is None:
             changed_titles.append(title)
             continue
@@ -1084,6 +938,11 @@ def _resolve_changed_heading_titles_against_markdown(
         if baseline_normalized != local_normalized:
             changed_titles.append(title)
 
+    for baseline_section in baseline_sections:
+        title = str(baseline_section.get("title") or "").strip()
+        if title and title not in local_titles:
+            changed_titles.append(title)
+
     return changed_titles
 
 
@@ -1093,23 +952,18 @@ def _resolve_changed_heading_titles_against_section_map(
     split_level: int,
 ) -> List[str]:
     sections = _parse_markdown_sections(md_path, split_level=split_level)
-    normalized_baseline_sections, unresolved_legacy_titles = _normalize_baseline_sections_by_title(
-        sections,
-        baseline_sections_by_title,
-    )
-    local_titles = [_section_identifier(section) for section in sections if _section_identifier(section)]
-    baseline_titles = [str(title or "").strip() for title in normalized_baseline_sections.keys() if str(title or "").strip()]
-    if _deleted_heading_titles(local_titles, baseline_titles):
-        return [_FULL_PAGE_AUTO_SENTINEL]
     changed_titles: List[str] = []
+    local_titles = {
+        str(section.get("title") or "").strip()
+        for section in sections
+        if str(section.get("title") or "").strip()
+    }
 
     for section in sections:
-        title = _section_identifier(section)
+        title = str(section.get("title") or "").strip()
         if not title:
             continue
-        baseline_markdown = normalized_baseline_sections.get(title)
-        if baseline_markdown is None and str(section.get("title") or "").strip() in unresolved_legacy_titles:
-            continue
+        baseline_markdown = baseline_sections_by_title.get(title)
         if baseline_markdown is None:
             changed_titles.append(title)
             continue
@@ -1119,68 +973,82 @@ def _resolve_changed_heading_titles_against_section_map(
         if baseline_normalized != local_normalized:
             changed_titles.append(title)
 
+    for title in baseline_sections_by_title.keys():
+        normalized_title = str(title or "").strip()
+        if normalized_title and normalized_title not in local_titles:
+            changed_titles.append(normalized_title)
+
     return changed_titles
 
 
-def _normalize_baseline_sections_by_title(
-    sections: List[Dict[str, Any]],
-    baseline_sections_by_title: Dict[str, str],
-) -> Tuple[Dict[str, str], set]:
-    normalized: Dict[str, str] = {}
-    unresolved_legacy_titles: set = set()
-    if not baseline_sections_by_title:
-        return normalized, unresolved_legacy_titles
+def _extract_storage_heading_titles(storage_html: str, split_level: int) -> List[str]:
+    if not storage_html:
+        return []
 
-    local_by_identifier = {
-        _section_identifier(section): section
-        for section in sections
-        if _section_identifier(section)
-    }
-    local_by_leaf_title: Dict[str, List[Dict[str, Any]]] = {}
-    has_path_qualified_local_titles = any(_HEADING_PATH_SEPARATOR in identifier for identifier in local_by_identifier)
-    for section in sections:
-        leaf_title = str(section.get("title") or "").strip()
-        if not leaf_title:
+    target_tag = f"h{int(split_level)}"
+    heading_re = re.compile(r"<(h[1-6])\b[^>]*>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
+    titles: List[str] = []
+    for match in heading_re.finditer(storage_html):
+        if str(match.group(1) or "").lower() != target_tag:
             continue
-        local_by_leaf_title.setdefault(leaf_title, []).append(section)
+        title = _html_to_plain_text(match.group(2)).strip()
+        if title:
+            titles.append(title)
+    return titles
 
-    for raw_title, raw_markdown in baseline_sections_by_title.items():
-        baseline_title = str(raw_title or "").strip()
-        if not baseline_title:
-            continue
-        baseline_markdown = str(raw_markdown or "")
 
-        if baseline_title in local_by_identifier:
-            normalized[baseline_title] = baseline_markdown
-            continue
+def _parse_markdown_sections_from_text(markdown_text: str, split_level: int = 1) -> List[Dict[str, str]]:
+    heading_pattern = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+    sections: List[Dict[str, str]] = []
+    preface: List[str] = []
+    current_title: Optional[str] = None
+    current_lines: List[str] = []
+    in_fenced_code = False
 
-        matches = list(local_by_leaf_title.get(baseline_title, []))
-        if len(matches) == 1:
-            normalized[_section_identifier(matches[0])] = baseline_markdown
+    for raw_line in (markdown_text or "").replace("\r\n", "\n").split("\n"):
+        line = raw_line.rstrip("\r")
+
+        if re.match(r"^\s*```", line):
+            in_fenced_code = not in_fenced_code
+            if current_title is not None:
+                current_lines.append(line)
+            else:
+                preface.append(line)
             continue
 
-        if len(matches) > 1 and has_path_qualified_local_titles:
-            baseline_normalized = _normalize_section_body_for_autodetect(baseline_markdown, is_html=False)
-            exact_matches = [
-                section
-                for section in matches
-                if _normalize_section_body_for_autodetect(str(section.get("markdown") or ""), is_html=False)
-                == baseline_normalized
-            ]
-            if len(exact_matches) == 1:
-                normalized[_section_identifier(exact_matches[0])] = baseline_markdown
+        if not in_fenced_code:
+            heading_match = heading_pattern.match(line)
+            if heading_match:
+                heading_depth = len(heading_match.group(1))
+                if heading_depth != split_level:
+                    if current_title is not None:
+                        current_lines.append(line)
+                    else:
+                        preface.append(line)
+                    continue
+
+                if current_title is not None:
+                    sections.append({"title": current_title, "markdown": "\n".join(current_lines).strip()})
+
+                current_title = heading_match.group(2).strip() or f"Section {len(sections) + 1}"
+                current_lines = []
                 continue
-            unresolved_legacy_titles.add(baseline_title)
-            continue
 
-        normalized[baseline_title] = baseline_markdown
+        if current_title is not None:
+            current_lines.append(line)
+        else:
+            preface.append(line)
 
-    return normalized, unresolved_legacy_titles
+    if current_title is not None:
+        sections.append({"title": current_title, "markdown": "\n".join(current_lines).strip()})
 
+    if preface and sections:
+        sections[0]["markdown"] = ("\n".join(preface).strip() + "\n\n" + sections[0]["markdown"]).strip()
 
-def _parse_markdown_sections_from_text(markdown_text: str, split_level: int = 1) -> List[Dict[str, Any]]:
-    lines = [raw_line.rstrip("\r") for raw_line in (markdown_text or "").replace("\r\n", "\n").split("\n")]
-    return _parse_markdown_sections_from_lines(lines, split_level=split_level, default_title="Document")
+    if not sections:
+        sections.append({"title": "Document", "markdown": "\n".join(preface).strip()})
+
+    return sections
 
 
 def _auto_heading_baseline_path(output_dir: str, page_id: str) -> str:
@@ -1288,15 +1156,14 @@ def _load_auto_heading_baseline(
     if int(payload.get("split_level") or 0) != int(split_level):
         return None
 
-    saved_md_path = os.path.normcase(os.path.abspath(str(payload.get("md_path") or "")))
-    requested_md_path = os.path.normcase(os.path.abspath(md_path))
+    saved_md_path = os.path.abspath(str(payload.get("md_path") or ""))
+    requested_md_path = os.path.abspath(md_path)
     if saved_md_path != requested_md_path:
         try:
-            requested_sections = _parse_markdown_sections(md_path, split_level=split_level)
             requested_titles = [
-                _section_identifier(section)
-                for section in requested_sections
-                if _section_identifier(section)
+                str(section.get("title") or "").strip()
+                for section in _parse_markdown_sections(md_path, split_level=split_level)
+                if str(section.get("title") or "").strip()
             ]
         except Exception:
             return None
@@ -1306,13 +1173,7 @@ def _load_auto_heading_baseline(
             return None
         saved_titles = [str(title or "").strip() for title in saved_headings.keys() if str(title or "").strip()]
         if requested_titles != saved_titles:
-            normalized_saved_headings, unresolved_legacy_titles = _normalize_baseline_sections_by_title(
-                requested_sections,
-                {str(title or "").strip(): str(markdown or "") for title, markdown in saved_headings.items()},
-            )
-            normalized_saved_titles = [str(title or "").strip() for title in normalized_saved_headings.keys() if str(title or "").strip()]
-            if requested_titles != normalized_saved_titles and not unresolved_legacy_titles:
-                return None
+            return None
 
     return payload
 
@@ -1339,7 +1200,7 @@ def _save_auto_heading_baseline(
 def _build_markdown_section_map(md_path: str, split_level: int) -> Dict[str, str]:
     section_map: Dict[str, str] = {}
     for section in _parse_markdown_sections(md_path, split_level=split_level):
-        title = _section_identifier(section)
+        title = str(section.get("title") or "").strip()
         if not title:
             continue
         section_map[title] = str(section.get("markdown") or "")
@@ -1359,14 +1220,15 @@ def _resolve_changed_heading_titles(
         return _resolve_changed_heading_titles_against_markdown(md_path, baseline_markdown, split_level)
 
     sections = _parse_markdown_sections(md_path, split_level=split_level)
-    local_titles = [_section_identifier(section) for section in sections if _section_identifier(section)]
-    live_titles = _extract_storage_heading_titles(storage_html, split_level)
-    if _deleted_heading_titles(local_titles, live_titles):
-        return [_FULL_PAGE_AUTO_SENTINEL]
     changed_titles: List[str] = []
+    local_titles = {
+        str(section.get("title") or "").strip()
+        for section in sections
+        if str(section.get("title") or "").strip()
+    }
 
     for section in sections:
-        title = _section_identifier(section)
+        title = str(section.get("title") or "").strip()
         if not title:
             continue
         live_span = _find_heading_section_span(storage_html, title, heading_level=split_level)
@@ -1379,6 +1241,11 @@ def _resolve_changed_heading_titles(
         local_normalized = _normalize_section_body_for_autodetect(str(section.get("markdown") or ""), is_html=False)
         if live_normalized != local_normalized:
             changed_titles.append(title)
+
+    for title in _extract_storage_heading_titles(storage_html, split_level):
+        normalized_title = str(title or "").strip()
+        if normalized_title and normalized_title not in local_titles:
+            changed_titles.append(normalized_title)
 
     return changed_titles
 
@@ -1399,52 +1266,6 @@ def _resolve_auto_heading_title(md_path: str, storage_html: str, split_level: in
         "Unable to auto-resolve a changed heading because multiple split-level sections differ from the current page: "
         f"{changed_titles}. Pass --heading-title explicitly."
     )
-
-
-def _select_auto_heading_target(changed_titles: List[str], allow_full_page_fallback: bool) -> str:
-    if not changed_titles:
-        raise SystemExit(
-            "Unable to auto-resolve a changed heading because no split-level section differs from the current page. "
-            "Pass --heading-title explicitly."
-        )
-
-    requires_full_page = _FULL_PAGE_AUTO_SENTINEL in changed_titles or len(changed_titles) > 1
-    if not requires_full_page:
-        return changed_titles[0]
-
-    if allow_full_page_fallback:
-        return _FULL_PAGE_AUTO_SENTINEL
-
-    if _FULL_PAGE_AUTO_SENTINEL in changed_titles:
-        raise SystemExit(
-            "Auto heading resolution detected deleted or renamed headings that require a full-page overwrite. "
-            "Blocked by default to avoid overwriting non-Markdown page content. "
-            "Pass --heading-title explicitly or rerun with --allow-full-page-fallback."
-        )
-
-    raise SystemExit(
-        "Auto heading resolution found multiple changed split-level sections. "
-        "Blocked by default to avoid a full-page overwrite. "
-        f"Changed headings: {changed_titles}. Pass --heading-title explicitly or rerun with --allow-full-page-fallback."
-    )
-
-
-def _select_auto_publish_target(
-    changed_titles: List[str],
-    allow_full_page_fallback: bool,
-    anchor_region_available: bool,
-) -> str:
-    if anchor_region_available:
-        return _ANCHOR_REGION_AUTO_SENTINEL
-    return _select_auto_heading_target(changed_titles, allow_full_page_fallback)
-
-
-def _display_heading_target(heading_title: str) -> str:
-    if str(heading_title or "") == _FULL_PAGE_AUTO_SENTINEL:
-        return "FULL_PAGE_AUTO"
-    if str(heading_title or "") == _ANCHOR_REGION_AUTO_SENTINEL:
-        return "ANCHOR_REGION_AUTO"
-    return str(heading_title or "")
 
 
 def _build_self_command_for_heading(args: argparse.Namespace, heading_title: str) -> List[str]:
@@ -1469,10 +1290,6 @@ def _build_self_command_for_heading(args: argparse.Namespace, heading_title: str
         args.reflect_mode,
         "--reflect-auto-clear-seconds",
         str(args.reflect_auto_clear_seconds),
-        "--anchor-start-name",
-        str(args.anchor_start_name),
-        "--anchor-end-name",
-        str(args.anchor_end_name),
         "--guard-script",
         args.guard_script,
         "--python-executable",
@@ -1497,6 +1314,7 @@ def _build_self_command_for_heading(args: argparse.Namespace, heading_title: str
         ("--force-scdp-override", args.force_scdp_override),
         ("--yes-override", args.yes_override),
         ("--no-prompt-override", args.no_prompt_override),
+        ("--no-prompt-missing-heading", args.no_prompt_missing_heading),
         ("--require-visible-inline-markers", args.require_visible_inline_markers),
         ("--reflect-on-page", args.reflect_on_page),
         ("--reflect-keep-after-refresh", args.reflect_keep_after_refresh),
@@ -1675,10 +1493,6 @@ def _find_all_occurrences(text: str, needle: str) -> List[int]:
     return positions
 
 
-def _strip_inline_marker_tags(text: str) -> str:
-    return re.sub(r"</?ac:inline-comment-marker\b[^>]*>", "", str(text or ""), flags=re.IGNORECASE)
-
-
 def _common_suffix_len(left: str, right: str) -> int:
     max_len = min(len(left), len(right))
     matched = 0
@@ -1726,39 +1540,12 @@ def _pick_best_occurrence_by_context(
         # elsewhere, weak-context auto-selection makes the comment drift.
         if preferred_index is None:
             return best_index
-        
-        # For a unique occurrence, check if the original left_context can be found
-        # in the new storage near the occurrence. If not, it indicates the context
-        # has changed (e.g., surrounding rows/blocks were deleted).
-        before_occurrence = text[:occurrences[0]]
-        if left_context:
-            normalized_left_context = _strip_inline_marker_tags(left_context)
-            normalized_before_occurrence = _strip_inline_marker_tags(before_occurrence)
-            if normalized_left_context not in normalized_before_occurrence:
-                # Avoid fragile exact-context checks: injected marker tags and
-                # nearby edits can slightly shift context while the anchor is
-                # still on the same semantic row/item.
-                plain_left = _html_to_plain_text(normalized_left_context)
-                plain_before = _html_to_plain_text(normalized_before_occurrence)
-                left_words = [word for word in re.split(r"\s+", plain_left.strip()) if word]
-                if len(left_words) >= 2:
-                    trailing_phrase = " ".join(left_words[-2:]).lower()
-                    if trailing_phrase and trailing_phrase not in plain_before.lower():
-                        return None
-                elif left_words:
-                    token = left_words[-1].lower()
-                    if len(token) >= 3 and token not in plain_before.lower():
-                        return None
-        
-        # Context seems to match - use the unique occurrence if score is good
-        if best_score >= _MIN_CONTEXT_SCORE:
-            return best_index
-        
-        # Weak score but unique - need reasonable distance
-        max_dist = max(len(anchor), 30)
-        if abs(best_index - preferred_index) <= max_dist:
+        max_dist = max(len(anchor) * 3, 120)
+        if best_score >= _MIN_CONTEXT_SCORE or abs(best_index - preferred_index) <= max_dist:
             return best_index
         return None
+
+        return best_index
 
     if best_score < _MIN_CONTEXT_SCORE:
         if preferred_index is not None:
@@ -1858,10 +1645,8 @@ def _pick_edited_context_span(
     left_context: str,
     right_context: str,
     preferred_index: Optional[int] = None,
-    original_anchor: Optional[str] = None,
 ) -> Optional[Tuple[int, int]]:
-    """Pick a safe anchor span using surrounding context when anchor text changed.
-    Falls back to finding partial anchor matches if context-based approach fails."""
+    """Pick a safe anchor span using surrounding context when anchor text changed."""
     left_pos, left_len = _find_best_context_fragment_near_preferred(
         text,
         left_context,
@@ -1878,48 +1663,8 @@ def _pick_edited_context_span(
     )
     score = left_len + right_len
 
-    # When exact anchor is deleted but context is available, be more lenient.
-    # Require either: strong context on one side (>= MIN_CONTEXT_FRAGMENT),
-    # or weak-but-present context on both sides (score >= 4).
-    has_strong = max(left_len, right_len) >= _MIN_CONTEXT_FRAGMENT
-    has_weak_both = left_len >= 2 and right_len >= 2
-    
-    # If context is too weak, try matching the original anchor before giving up
-    if not (has_strong or has_weak_both) and original_anchor:
-        # Try exact match first
-        anchor_pos = text.find(original_anchor)
-        if anchor_pos != -1:
-            return (anchor_pos, anchor_pos + len(original_anchor))
-        # Try without trailing punctuation
-        anchor_clean = original_anchor.rstrip('.,;:!?')
-        if anchor_clean != original_anchor:
-            clean_pos = text.find(anchor_clean)
-            if clean_pos != -1:
-                # Expand to include following text
-                end_pos = clean_pos + len(anchor_clean)
-                while end_pos < len(text) and text[end_pos] not in '<>\n':
-                    end_pos += 1
-                return (clean_pos, end_pos)
-        # Try first N words of anchor
-        words = original_anchor.split()[:3]  # First 3 words
-        if len(words) > 1:
-            partial = ' '.join(words)
-            partial_pos = text.find(partial)
-            if partial_pos != -1:
-                # Expand to include full context around it
-                start_pos = partial_pos
-                end_pos = partial_pos + len(partial)
-                # Expand backwards to word boundary
-                while start_pos > 0 and text[start_pos - 1] not in '<> \n':
-                    start_pos -= 1
-                # Expand forward to include edited part
-                while end_pos < len(text) and text[end_pos] not in '<>\n':
-                    end_pos += 1
-                return (start_pos, end_pos)
-    
-    if not (has_strong or has_weak_both):
-        if score == 0:
-            return None
+    if max(left_len, right_len) < _MIN_CONTEXT_FRAGMENT:
+        return None
 
     start = left_pos + left_len if left_pos is not None else right_pos
     if start is None:
@@ -1931,20 +1676,8 @@ def _pick_edited_context_span(
     if end <= start:
         token_span = _pick_nearest_text_token_span(text, start)
         return token_span
-    
-    # Expand span to capture full text token, not just between markers.
-    expanded_start = start
-    while expanded_start > 0 and text[expanded_start - 1] not in '<> \n\t':
-        expanded_start -= 1
-    expanded_end = end
-    while expanded_end < len(text) and text[expanded_end] not in '<> \n\t':
-        expanded_end += 1
-    
-    # Try the expanded span first, then fall back to original
-    normalized = _normalize_fallback_span(text, (expanded_start, expanded_end))
-    if normalized[1] <= normalized[0]:
-        # Fallback to original span if expansion didn't work
-        normalized = _normalize_fallback_span(text, (start, end))
+
+    normalized = _normalize_fallback_span(text, (start, end))
     if normalized[1] <= normalized[0]:
         return None
     return normalized
@@ -2176,6 +1909,52 @@ def _find_nearest_table_cell_span(text: str, index: int) -> Optional[Tuple[int, 
     return (nearest[1], nearest[2])
 
 
+def _find_enclosing_table_row_span(text: str, index: int) -> Optional[Tuple[int, int]]:
+    row_open_re = re.compile(r'<tr\b[^>]*>', re.IGNORECASE)
+    row_close_re = re.compile(r'</tr\s*>', re.IGNORECASE)
+
+    search_back_start = max(0, index - (4 * _FALLBACK_SEARCH_WINDOW))
+    open_matches = list(row_open_re.finditer(text, search_back_start, index + 1))
+    if not open_matches:
+        return None
+
+    row_start = open_matches[-1].start()
+    row_open_end = open_matches[-1].end()
+    close_match = row_close_re.search(text, row_open_end)
+    if close_match is None or close_match.start() < index:
+        return None
+    return (row_start, close_match.end())
+
+
+def _table_row_context_matches(
+    text: str,
+    occurrence_index: int,
+    left_context: str,
+    right_context: str,
+) -> bool:
+    row_span = _find_enclosing_table_row_span(text, occurrence_index)
+    if row_span is None:
+        return True
+
+    row_text = _html_to_plain_text(text[row_span[0]:row_span[1]])
+    left_plain = _html_to_plain_text(left_context)
+    right_plain = _html_to_plain_text(right_context)
+
+    left_pos, left_len = _find_best_context_fragment(row_text, left_plain, from_left=True)
+    right_search_start = (left_pos + left_len) if left_pos is not None else 0
+    _right_pos, right_len = _find_best_context_fragment(
+        row_text,
+        right_plain,
+        from_left=False,
+        start_at=right_search_start,
+    )
+
+    min_row_context = 4
+    if any(ch.isalnum() for ch in left_plain):
+        return left_len >= min_row_context
+    return max(left_len, right_len) >= min_row_context
+
+
 def _pick_fallback_anchor_span(text: str, left_context: str, right_context: str) -> Optional[Tuple[int, int]]:
     start, end, score = _find_contextual_span(text, left_context, right_context)
     if start is None or score < _MIN_CONTEXT_FRAGMENT:
@@ -2354,26 +2133,6 @@ def _resolve_deleted_heading_preference(
     return preferred_index
 
 
-def _has_deleted_heading_context(text: str, left_context: str) -> bool:
-    context = str(left_context or "")
-    if not context:
-        return False
-
-    matches = list(re.finditer(r"<(h[1-6])\b[^>]*>(.*?)</\1>", context, re.IGNORECASE | re.DOTALL))
-    if not matches:
-        return False
-
-    deleted_heading_text = _html_to_plain_text(matches[-1].group(2)).strip().lower()
-    if not deleted_heading_text:
-        return False
-
-    for candidate in _iter_heading_candidates(text):
-        current_text = str(candidate.get("normalized_text") or "").strip().lower()
-        if current_text == deleted_heading_text:
-            return False
-    return True
-
-
 def _pick_deleted_heading_anchor_span(
     text: str,
     left_context: str,
@@ -2414,10 +2173,9 @@ def _pick_deleted_heading_insertion_point(
     heading_path: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[int]:
     if heading_path:
-        candidate_info = _pick_heading_candidate_from_path(text, heading_path)
-        if candidate_info is not None:
-            best_candidate, _best_depth, _target_depth, _match_kind = candidate_info
-            return int(best_candidate["end"])
+        heading_candidate = _pick_heading_candidate_from_path(text, heading_path)
+        if heading_candidate is not None:
+            return int(heading_candidate["end"])
 
     context_lower = str(left_context or "").lower()
     if context_lower:
@@ -2462,129 +2220,67 @@ def _pick_heading_span_matching_anchor(
     return (chosen[1], chosen[2])
 
 
-def _pick_heading_span_by_level(
+def _pick_heading_span_near_right_context(
     text: str,
-    target_level: int,
-    preferred_index: Optional[int],
+    right_context: str,
+    heading_path: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Tuple[int, int]]:
-    candidates = [candidate for candidate in _iter_heading_candidates(text) if int(candidate["level"]) == int(target_level)]
-    if not candidates:
+    right_pos, right_len = _find_best_context_fragment(text, right_context, from_left=False)
+    if right_pos is None or right_len < _MIN_CONTEXT_FRAGMENT:
         return None
-    if preferred_index is None:
-        chosen = candidates[0]
-    else:
-        chosen = min(candidates, key=lambda candidate: abs(int(candidate["start"]) - preferred_index))
-    return (int(chosen["content_start"]), int(chosen["content_end"]))
 
+    target_path = [
+        str(item.get("normalized_text") or "").strip()
+        for item in (heading_path or [])
+        if str(item.get("normalized_text") or "").strip()
+    ]
 
-def _pick_heading_branch_span_by_level(
-    text: str,
-    target_level: int,
-    preferred_index: Optional[int],
-) -> Optional[Tuple[int, int]]:
-    candidates = [candidate for candidate in _iter_heading_candidates(text) if int(candidate["level"]) == int(target_level)]
-    if not candidates:
-        return None
-    if preferred_index is None:
-        chosen_index = 0
-    else:
-        chosen_index = min(
-            range(len(candidates)),
-            key=lambda index: abs(int(candidates[index]["start"]) - preferred_index),
-        )
-    chosen = candidates[chosen_index]
-    branch_end = len(text)
-    for candidate in candidates[chosen_index + 1:]:
-        if int(candidate["start"]) > int(chosen["start"]):
-            branch_end = int(candidate["start"])
+    best_candidate: Optional[Dict[str, Any]] = None
+    best_score: Optional[Tuple[int, int, int, int]] = None
+    for candidate in _iter_heading_candidates(text):
+        candidate_start = int(candidate["start"])
+        if candidate_start >= right_pos:
             break
-    return (int(chosen["end"]), branch_end)
 
+        actual_path = [
+            str(item.get("normalized_text") or "")
+            for item in _heading_path_at_index(text, candidate_start)
+            if str(item.get("normalized_text") or "")
+        ]
+        shared_depth = 0
+        max_depth = min(len(actual_path), len(target_path))
+        while shared_depth < max_depth and actual_path[shared_depth] == target_path[shared_depth]:
+            shared_depth += 1
 
-def _iter_heading_branch_spans_by_level(text: str, target_level: int) -> List[Tuple[int, int]]:
-    candidates = [candidate for candidate in _iter_heading_candidates(text) if int(candidate["level"]) == int(target_level)]
-    branch_spans: List[Tuple[int, int]] = []
-    for index, candidate in enumerate(candidates):
-        branch_end = len(text)
-        for later_candidate in candidates[index + 1:]:
-            if int(later_candidate["start"]) > int(candidate["start"]):
-                branch_end = int(later_candidate["start"])
-                break
-        branch_spans.append((int(candidate["end"]), branch_end))
-    return branch_spans
+        score = (
+            shared_depth,
+            len(actual_path),
+            int(candidate.get("level") or 0),
+            candidate_start,
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_candidate = candidate
+
+    if best_candidate is None:
+        return None
+    return (int(best_candidate["content_start"]), int(best_candidate["content_end"]))
 
 
 def _pick_heading_span_from_path(
     text: str,
     heading_path: List[Dict[str, Any]],
 ) -> Optional[Tuple[int, int]]:
-    candidate_info = _pick_heading_candidate_from_path(text, heading_path)
-    if candidate_info is None:
+    best_candidate = _pick_heading_candidate_from_path(text, heading_path)
+    if best_candidate is None:
         return None
-    best_candidate, _best_depth, _target_depth, _match_kind = candidate_info
     return (int(best_candidate["content_start"]), int(best_candidate["content_end"]))
-
-
-def _context_indicates_heading_anchor(left_context: str, right_context: str) -> bool:
-    left = str(left_context or "")
-    right = str(right_context or "")
-    if not left or not right:
-        return False
-    return bool(
-        re.search(r"<h[1-6]\b[^>]*>[^<]*$", left, re.IGNORECASE | re.DOTALL)
-        and re.search(r"^.*?</h[1-6]>", right, re.IGNORECASE | re.DOTALL)
-    )
-
-
-def _pick_renamed_descendant_heading_span_from_path(
-    text: str,
-    heading_path: List[Dict[str, Any]],
-    preferred_index: Optional[int],
-) -> Optional[Tuple[int, int]]:
-    if len(heading_path) < 2:
-        return None
-
-    parent_info = _pick_heading_candidate_from_path(text, heading_path[:-1])
-    if parent_info is None:
-        return None
-
-    parent_candidate, _best_depth, _target_depth, _match_kind = parent_info
-    parent_level = int(parent_candidate["level"])
-    target_level = int(heading_path[-1].get("level") or 0)
-    if target_level <= parent_level:
-        return None
-
-    branch_end = len(text)
-    descendants: List[Dict[str, Any]] = []
-    parent_seen = False
-    for candidate in _iter_heading_candidates(text):
-        if int(candidate["start"]) == int(parent_candidate["start"]):
-            parent_seen = True
-            continue
-        if not parent_seen:
-            continue
-        if int(candidate["level"]) <= parent_level:
-            branch_end = int(candidate["start"])
-            break
-        if int(candidate["start"]) < branch_end:
-            descendants.append(candidate)
-
-    if not descendants:
-        return None
-
-    same_level = [candidate for candidate in descendants if int(candidate["level"]) == target_level]
-    pool = same_level or descendants
-    if preferred_index is None:
-        chosen = pool[0]
-    else:
-        chosen = min(pool, key=lambda candidate: abs(int(candidate["start"]) - preferred_index))
-    return (int(chosen["content_start"]), int(chosen["content_end"]))
 
 
 def _pick_heading_candidate_from_path(
     text: str,
     heading_path: List[Dict[str, Any]],
-) -> Optional[Tuple[Dict[str, Any], int, int, str]]:
+) -> Optional[Dict[str, Any]]:
     target_path = [
         str(item.get("normalized_text") or "").strip()
         for item in heading_path
@@ -2596,8 +2292,6 @@ def _pick_heading_candidate_from_path(
     current_path: List[Dict[str, Any]] = []
     best_candidate: Optional[Dict[str, Any]] = None
     best_depth = 0
-    best_priority = -1
-    best_match_kind = ""
 
     for candidate in _iter_heading_candidates(text):
         while current_path and int(current_path[-1]["level"]) >= int(candidate["level"]):
@@ -2605,53 +2299,19 @@ def _pick_heading_candidate_from_path(
         current_path.append(candidate)
 
         current_normalized = [str(item.get("normalized_text") or "") for item in current_path]
+        max_depth = min(len(current_normalized), len(target_path))
         matched_depth = 0
-        matched_candidate: Optional[Dict[str, Any]] = None
-        match_kind = ""
-        match_priority = -1
+        for depth in range(1, max_depth + 1):
+            if current_normalized[:depth] == target_path[:depth]:
+                matched_depth = depth
+            else:
+                break
 
-        if current_normalized == target_path:
-            matched_depth = len(target_path)
-            matched_candidate = current_path[-1]
-            match_kind = "exact"
-            match_priority = 4
-        elif len(current_normalized) <= len(target_path) and current_normalized == target_path[-len(current_normalized):]:
-            matched_depth = len(current_normalized)
-            matched_candidate = current_path[-1]
-            match_kind = "leaf_suffix"
-            match_priority = 3
-        elif len(current_normalized) <= len(target_path) and current_normalized == target_path[:len(current_normalized)]:
-            matched_depth = len(current_normalized)
-            matched_candidate = current_path[-1]
-            match_kind = "ancestor_prefix"
-            match_priority = 2
-        else:
-            max_depth = min(len(current_normalized), len(target_path))
-            for depth in range(1, max_depth + 1):
-                if current_normalized[:depth] == target_path[:depth]:
-                    matched_depth = depth
-                else:
-                    break
-            if matched_depth > 0:
-                matched_candidate = current_path[matched_depth - 1]
-                match_kind = "prefix_partial"
-                match_priority = 1
-
-        if matched_candidate is None or matched_depth == 0:
-            continue
-
-        if (
-            match_priority > best_priority
-            or (match_priority == best_priority and matched_depth > best_depth)
-        ):
-            best_priority = match_priority
+        if matched_depth >= best_depth and matched_depth > 0:
             best_depth = matched_depth
-            best_candidate = matched_candidate
-            best_match_kind = match_kind
+            best_candidate = current_path[matched_depth - 1]
 
-    if best_candidate is None:
-        return None
-    return best_candidate, best_depth, len(target_path), best_match_kind
+    return best_candidate
 
 
 def _occurrence_matches_heading_path(
@@ -2730,46 +2390,7 @@ def _inject_inline_markers(
         preferred_index: Optional[int],
         heading_path: Optional[List[Dict[str, Any]]],
     ) -> bool:
-        if heading_path and _context_indicates_heading_anchor(left_context, right_context):
-            renamed_heading_span_rel = _pick_renamed_descendant_heading_span_from_path(
-                search_space,
-                heading_path,
-                preferred_index,
-            )
-            if renamed_heading_span_rel is not None:
-                span_start_rel, span_end_rel = renamed_heading_span_rel
-                span_start_abs = scope_start + span_start_rel
-                span_end_abs = scope_start + span_end_rel
-                fallback_anchor = search_space[span_start_rel:span_end_rel]
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-                _commit_injection(span_start_abs, span_end_abs, wrapped)
-                return True
-
-        if heading_path:
-            candidate_info = _pick_heading_candidate_from_path(search_space, heading_path)
-            if candidate_info is None:
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
-                return True
-
-            _best_candidate, best_depth, target_depth, match_kind = candidate_info
-            should_use_nearest_surviving_heading = (
-                match_kind == "leaf_suffix"
-                or (match_kind == "ancestor_prefix" and best_depth >= 2 and best_depth == target_depth - 1)
-            )
-            if best_depth < target_depth and not should_use_nearest_surviving_heading:
-                insert_rel = _pick_deleted_heading_insertion_point(
-                    search_space,
-                    left_context,
-                    preferred_index,
-                    heading_path=heading_path,
-                )
-                insert_abs = scope_start if insert_rel is None else scope_start + insert_rel
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
-                return True
-
+        nonlocal deleted_anchor_icon_count
         heading_span_rel = _pick_deleted_heading_anchor_span(
             search_space,
             left_context,
@@ -2777,16 +2398,28 @@ def _inject_inline_markers(
             heading_path=heading_path,
         )
         if heading_span_rel is None:
-            if heading_path:
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
-                return True
             return False
         span_start_rel, span_end_rel = heading_span_rel
         span_start_abs = scope_start + span_start_rel
         span_end_abs = scope_start + span_end_rel
         fallback_anchor = search_space[span_start_rel:span_end_rel]
+        target_heading_text = _normalize_heading_text(str((heading_path or [{}])[-1].get("text") or ""))
+        selected_heading_text = _normalize_heading_text(fallback_anchor)
+        if target_heading_text and selected_heading_text and selected_heading_text != target_heading_text:
+            insert_rel = _pick_deleted_heading_insertion_point(
+                search_space,
+                left_context,
+                preferred_index,
+                heading_path=heading_path,
+            )
+            if insert_rel is None:
+                return False
+            insert_rel = _normalize_insertion_point_outside_tag(search_space, insert_rel)
+            insert_abs = scope_start + insert_rel
+            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_DELETED_COMMENT_ICON_HTML}</ac:inline-comment-marker>'
+            _commit_injection(insert_abs, insert_abs, wrapped)
+            deleted_anchor_icon_count += 1
+            return True
         wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
         _commit_injection(span_start_abs, span_end_abs, wrapped)
         return True
@@ -2801,15 +2434,7 @@ def _inject_inline_markers(
         preferred_index: Optional[int] = None
         if old_start >= 0:
             preferred_index = max(0, old_start - old_scope_start + accumulated_injection_delta)
-        visible_anchor_text = _marker_visible_anchor_text(anchor)
         anchor, anchor_was_nested_marker = _normalize_anchor_for_matching(anchor)
-        if not visible_anchor_text:
-            insert_abs = scope_start
-            fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
-            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-            _commit_injection(insert_abs, insert_abs, wrapped)
-            deleted_anchor_icon_count += 1
-            continue
         if not anchor or not anchor.strip():
             skipped += 1
             continue
@@ -2826,112 +2451,18 @@ def _inject_inline_markers(
         if preferred_index is not None:
             preferred_index = max(0, min(preferred_index, len(search_space) - 1))
 
-        heading_path_missing = bool(heading_path) and _pick_heading_span_from_path(search_space, heading_path) is None
-        if heading_path_missing:
-            if len(heading_path) == 1:
-                target_level = int(heading_path[-1].get("level") or 0)
-                if target_level == 1 and _context_indicates_heading_anchor(left_context, right_context):
-                    renamed_heading_span_rel = _pick_heading_span_by_level(search_space, target_level, preferred_index)
-                    if renamed_heading_span_rel is not None:
-                        span_start_rel, span_end_rel = renamed_heading_span_rel
-                        span_start_abs = scope_start + span_start_rel
-                        span_end_abs = scope_start + span_end_rel
-                        fallback_anchor = search_space[span_start_rel:span_end_rel]
-                        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-                        _commit_injection(span_start_abs, span_end_abs, wrapped)
-                        continue
-                if target_level == 1 and not _context_indicates_heading_anchor(left_context, right_context):
-                    branch_matches: List[Tuple[int, int, int, int, str]] = []
-                    for branch_start_rel, branch_end_rel in _iter_heading_branch_spans_by_level(search_space, target_level):
-                        branch_search_space = search_space[branch_start_rel:branch_end_rel]
-                        if not branch_search_space:
-                            continue
-
-                        branch_preferred_index = preferred_index
-                        if branch_preferred_index is not None:
-                            branch_preferred_index = max(0, min(branch_preferred_index - branch_start_rel, len(branch_search_space) - 1))
-
-                        branch_anchor = anchor
-                        branch_occurrences = _find_all_occurrences(branch_search_space, branch_anchor)
-                        if not branch_occurrences:
-                            stripped_anchor = anchor.strip()
-                            if stripped_anchor and stripped_anchor != anchor:
-                                stripped_occurrences = _find_all_occurrences(branch_search_space, stripped_anchor)
-                                if stripped_occurrences:
-                                    branch_occurrences = stripped_occurrences
-                                    branch_anchor = stripped_anchor
-
-                        if branch_occurrences:
-                            branch_selected_index = _pick_best_occurrence_by_context(
-                                text=branch_search_space,
-                                anchor=branch_anchor,
-                                occurrences=branch_occurrences,
-                                left_context=left_context,
-                                right_context=right_context,
-                                preferred_index=branch_preferred_index,
-                            )
-                            if branch_selected_index is not None and _is_safe_wrap_span(
-                                branch_search_space,
-                                branch_selected_index,
-                                branch_selected_index + len(branch_anchor),
-                            ):
-                                branch_score = _score_occurrence_context(
-                                    branch_search_space,
-                                    branch_anchor,
-                                    branch_selected_index,
-                                    left_context,
-                                    right_context,
-                                )
-                                branch_matches.append((2, branch_score, branch_start_rel, branch_selected_index, branch_anchor))
-                                continue
-
-                        branch_edited_span = _pick_edited_context_span(
-                            branch_search_space,
-                            left_context,
-                            right_context,
-                            preferred_index=branch_preferred_index,
-                            original_anchor=anchor,
-                        )
-                        if branch_edited_span is not None:
-                            branch_span_start_rel, branch_span_end_rel = branch_edited_span
-                            if _is_safe_wrap_span(branch_search_space, branch_span_start_rel, branch_span_end_rel):
-                                edited_anchor = branch_search_space[branch_span_start_rel:branch_span_end_rel]
-                                branch_score = _score_occurrence_context(
-                                    branch_search_space,
-                                    edited_anchor,
-                                    branch_span_start_rel,
-                                    left_context,
-                                    right_context,
-                                )
-                                branch_matches.append((1, branch_score, branch_start_rel, branch_span_start_rel, edited_anchor))
-
-                    if len(branch_matches) == 1:
-                        _match_kind, _match_score, branch_start_rel, branch_offset_rel, matched_anchor = branch_matches[0]
-                        branch_selected_abs = scope_start + branch_start_rel + branch_offset_rel
-                        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{matched_anchor}</ac:inline-comment-marker>'
-                        _commit_injection(branch_selected_abs, branch_selected_abs + len(matched_anchor), wrapped)
-                        continue
-
-                    insert_abs = scope_start
-                    wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                    _commit_injection(insert_abs, insert_abs, wrapped)
-                    continue
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
-                continue
-            else:
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_DELETED_COMMENT_ICON_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
-                continue
-
         if section_span is not None and preferred_index is not None and anchor_was_nested_marker:
             heading_span_rel = _pick_heading_span_matching_anchor(
                 search_space,
                 anchor,
                 preferred_index,
             )
+            if heading_span_rel is None:
+                heading_span_rel = _pick_heading_span_near_right_context(
+                    search_space,
+                    right_context,
+                    heading_path=heading_path,
+                )
             if heading_span_rel is not None:
                 span_start_rel, span_end_rel = heading_span_rel
                 span_start_abs = scope_start + span_start_rel
@@ -2955,6 +2486,16 @@ def _inject_inline_markers(
                 if strip_occurrences:
                     occurrences = strip_occurrences
                     anchor_used = stripped
+        if occurrences:
+            row_matched_occurrences = [
+                index
+                for index in occurrences
+                if _table_row_context_matches(search_space, index, left_context, right_context)
+            ]
+            if row_matched_occurrences:
+                occurrences = row_matched_occurrences
+            elif any(_find_enclosing_table_row_span(search_space, index) is not None for index in occurrences):
+                occurrences = []
         selected_index: Optional[int] = None
         if occurrences:
             selected_index = _pick_best_occurrence_by_context(
@@ -2972,21 +2513,18 @@ def _inject_inline_markers(
             if max(left_len, right_len) < _MIN_CONTEXT_FRAGMENT:
                 if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
                     continue
-        if selected_index is None:
-            # Only try edited-span picker if anchor genuinely doesn't exist (occurrences is empty).
-            # If occurrences exist but context rejected them, skip to fallback handling.
-            if not occurrences:
-                # Try edited-span picker when exact anchor is not found.
-                # This covers: anchor changed (text exists but needs editing) and anchor deleted entirely.
-                edited_span = _pick_edited_context_span(
-                    search_space,
-                    left_context,
-                    right_context,
-                    preferred_index=preferred_index,
-                    original_anchor=anchor,
-                )
-                if edited_span is not None:
-                    span_start_rel, span_end_rel = edited_span
+        if occurrences and selected_index is None:
+            edited_span = _pick_edited_context_span(
+                search_space,
+                left_context,
+                right_context,
+                preferred_index=preferred_index,
+            )
+            if edited_span is not None:
+                span_start_rel, span_end_rel = edited_span
+                if not _table_row_context_matches(search_space, span_start_rel, left_context, right_context):
+                    edited_span = None
+                else:
                     edited_anchor = search_space[span_start_rel:span_end_rel]
                     edited_context_score = _score_occurrence_context(
                         search_space,
@@ -3000,7 +2538,6 @@ def _inject_inline_markers(
                         and preferred_index is not None
                         and (
                             _is_inside_heading(search_space, span_start_rel)
-                            or _has_deleted_heading_context(search_space, left_context)
                             or _should_route_deleted_anchor_to_heading(anchor_used, edited_anchor, edited_context_score)
                         )
                     ):
@@ -3015,9 +2552,7 @@ def _inject_inline_markers(
             if preferred_index is not None:
                 if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
                     continue
-            # Proximity fallback: Only use if we have multiple occurrences (single occurrence was already
-            # context-checked and rejected). With multiple occurrences, proximity helps pick the best one.
-            if preferred_index is not None and len(occurrences) > 1:
+            if preferred_index is not None:
                 nearest = min(occurrences, key=lambda idx: abs(idx - preferred_index))
                 max_dist = max(len(anchor_used) * 3, 120)
                 if abs(nearest - preferred_index) <= max_dist:
@@ -3056,6 +2591,12 @@ def _inject_inline_markers(
                     anchor,
                     preferred_index,
                 )
+                if heading_span_rel is None:
+                    heading_span_rel = _pick_heading_span_near_right_context(
+                        search_space,
+                        right_context,
+                        heading_path=heading_path,
+                    )
                 if heading_span_rel is not None:
                     span_start_rel, span_end_rel = heading_span_rel
                     span_start_abs = scope_start + span_start_rel
@@ -3071,54 +2612,39 @@ def _inject_inline_markers(
                 left_context,
                 right_context,
                 preferred_index=preferred_index,
-                original_anchor=anchor,
             )
             if edited_span is not None:
-                edited_anchor = search_space[edited_span[0]:edited_span[1]]
-                edited_context_score = _score_occurrence_context(
-                    search_space,
-                    edited_anchor,
-                    edited_span[0],
-                    left_context,
-                    right_context,
-                )
-                if (
-                    section_span is not None
-                    and preferred_index is not None
-                    and (
-                        _has_deleted_heading_context(search_space, left_context)
-                        or _should_route_deleted_anchor_to_heading(anchor_used, edited_anchor, edited_context_score)
-                    )
-                ):
-                    if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
-                        continue
                 span_start_rel, span_end_rel = edited_span
-                if not _is_safe_wrap_span(search_space, span_start_rel, span_end_rel):
+                if not _table_row_context_matches(search_space, span_start_rel, left_context, right_context):
                     edited_span = None
                 else:
-                    span_start_abs = scope_start + span_start_rel
-                    span_end_abs = scope_start + span_end_rel
-                    fallback_anchor = search_space[span_start_rel:span_end_rel]
-                    wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-                    _commit_injection(span_start_abs, span_end_abs, wrapped)
-                    continue
+                    edited_anchor = search_space[span_start_rel:span_end_rel]
+                    edited_context_score = _score_occurrence_context(
+                        search_space,
+                        edited_anchor,
+                        span_start_rel,
+                        left_context,
+                        right_context,
+                    )
+                    if (
+                        section_span is not None
+                        and preferred_index is not None
+                        and _should_route_deleted_anchor_to_heading(anchor_used, edited_anchor, edited_context_score)
+                    ):
+                        if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
+                            continue
+                    if not _is_safe_wrap_span(search_space, span_start_rel, span_end_rel):
+                        edited_span = None
+                    else:
+                        span_start_abs = scope_start + span_start_rel
+                        span_end_abs = scope_start + span_end_rel
+                        fallback_anchor = search_space[span_start_rel:span_end_rel]
+                        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
+                        _commit_injection(span_start_abs, span_end_abs, wrapped)
+                        continue
             if section_span is not None:
                 if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
                     continue
-
-        # Exact occurrences existed but were rejected by context checks.
-        # Do not fall back to broad span selection that can drift to sibling rows.
-        if occurrences and selected_index is None and preferred_index is not None:
-            if section_span is not None and _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
-                continue
-            insert_rel = _find_deleted_icon_insertion_point(
-                search_space, preferred_index, left_context, right_context
-            )
-            insert_abs = scope_start + insert_rel
-            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-            _commit_injection(insert_abs, insert_abs, wrapped)
-            deleted_anchor_icon_count += 1
-            continue
 
         # If original anchor text was deleted entirely, preserve comment at the
         # original position using a visible icon placeholder at that location.
@@ -3127,7 +2653,7 @@ def _inject_inline_markers(
                 search_space, preferred_index, left_context, right_context
             )
             insert_abs = scope_start + insert_rel
-            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
+            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_DELETED_COMMENT_ICON_HTML}</ac:inline-comment-marker>'
             _commit_injection(insert_abs, insert_abs, wrapped)
             deleted_anchor_icon_count += 1
             continue
@@ -3153,7 +2679,7 @@ def _inject_inline_markers(
                 span_end_rel = insert_rel
                 span_start_abs = scope_start + span_start_rel
                 span_end_abs = span_start_abs
-                fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
+                fallback_anchor = _DELETED_COMMENT_ICON_HTML
                 deleted_anchor_icon_count += 1
             else:
                 fallback_anchor = search_space[span_start_rel:span_end_rel]
@@ -3173,7 +2699,7 @@ def _inject_inline_markers(
                     span_end_rel = insert_rel
                     span_start_abs = scope_start + span_start_rel
                     span_end_abs = span_start_abs
-                    fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
+                    fallback_anchor = _DELETED_COMMENT_ICON_HTML
                     deleted_anchor_icon_count += 1
                 else:
                     fallback_anchor = search_space[span_start_rel:span_end_rel]
@@ -3186,7 +2712,7 @@ def _inject_inline_markers(
                 span_end_rel = insert_rel
                 span_start_abs = scope_start + span_start_rel
                 span_end_abs = span_start_abs
-                fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
+                fallback_anchor = _DELETED_COMMENT_ICON_HTML
                 deleted_anchor_icon_count += 1
 
         wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
@@ -3217,13 +2743,7 @@ def _update_page_with_storage(
             "type": "page",
             "body": {"storage": {"value": storage_html, "representation": "storage"}},
         }
-        resp = requests.put(
-            url,
-            json=payload,
-            auth=auth,
-            headers=put_headers,
-            timeout=_PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS,
-        )
+        resp = requests.put(url, json=payload, auth=auth, headers=put_headers, timeout=60)
         if resp.status_code in (200, 201):
             return True
         if resp.status_code != 409:
@@ -3260,20 +2780,15 @@ def _reanchor_after_overwrite(
     if not old_markers or not open_ref_ids:
         return {"status": "skipped", "reason": "no open inline markers found before overwrite"}
     try:
-        print("[anchor-preserve] Fetching latest page storage after overwrite...")
         page_info = _fetch_page_storage_with_auth(args, config_module)
         new_storage = page_info["storage_html"]
         new_version = page_info["version"] + 1
         title = page_info["title"]
         auth = page_info["auth"]
         hdrs = page_info["headers"]
-        section_span = _find_target_storage_span(
-            new_storage,
-            heading_title,
-            heading_level,
-            args.anchor_start_name,
-            args.anchor_end_name,
-        )
+        section_span = _find_heading_section_span(new_storage, heading_title, heading_level=heading_level)
+        if section_span is None:
+            section_span = _find_surviving_section_span_from_markers(new_storage, old_markers)
 
         # Strip existing marker wrappers for refs we are about to re-anchor,
         # so comments can move to the correct heading when content is deleted.
@@ -3281,9 +2796,6 @@ def _reanchor_after_overwrite(
         if refs_to_strip:
             new_storage, _ = _strip_inline_markers_by_ref(new_storage, refs_to_strip)
 
-        print(
-            f"[anchor-preserve] Recomputing inline marker placements for {len(old_markers)} captured marker(s)..."
-        )
         # Use all captured markers. Confluence already removes markers for
         # resolved comments from storage HTML, so every marker in old_markers
         # is for an active comment. The UUID-based ac:ref does not match the
@@ -3295,13 +2807,13 @@ def _reanchor_after_overwrite(
             open_ref_ids,
             section_span=section_span,
         )
-        payload_section_span = _find_target_storage_span(
+        payload_section_span = _find_heading_section_span(
             updated_storage,
             heading_title,
-            heading_level,
-            args.anchor_start_name,
-            args.anchor_end_name,
+            heading_level=heading_level,
         )
+        if payload_section_span is None:
+            payload_section_span = _find_surviving_section_span_from_markers(updated_storage, old_markers)
         payload_section_html = (
             updated_storage
             if payload_section_span is None
@@ -3324,16 +2836,8 @@ def _reanchor_after_overwrite(
                 "payload_section_html": payload_section_html,
             }
 
-        print(
-            f"[anchor-preserve] Saving re-anchored storage back to Confluence (timeout {_PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS}s)..."
-        )
         success = _update_page_with_storage(
             args.base_url, args.page_id, new_version, title, updated_storage, auth, hdrs
-        )
-        print(
-            "[anchor-preserve] Storage save completed."
-            if success
-            else "[anchor-preserve] Storage save failed without exception."
         )
         return {
             "status": "ok" if success else "update-failed",
@@ -3374,10 +2878,6 @@ def _build_guard_command(args: argparse.Namespace, guard_json_path: str) -> List
 
     if args.split_level is not None:
         command.extend(["--split-level", str(args.split_level)])
-    if args.anchor_start_name:
-        command.extend(["--anchor-start-name", str(args.anchor_start_name)])
-    if args.anchor_end_name:
-        command.extend(["--anchor-end-name", str(args.anchor_end_name)])
 
     if args.apply:
         command.append("--apply")
@@ -3389,8 +2889,8 @@ def _build_guard_command(args: argparse.Namespace, guard_json_path: str) -> List
         command.append("--yes-override")
     if args.no_prompt_override:
         command.append("--no-prompt-override")
-    if args.allow_full_page_fallback:
-        command.append("--allow-full-page-fallback")
+        if args.no_prompt_missing_heading or args.no_prompt_override:
+            command.append("--no-prompt-missing-heading")
     if args.reflect_on_page:
         command.append("--reflect-on-page")
         command.extend(["--reflect-mode", args.reflect_mode])
@@ -3406,13 +2906,17 @@ def _build_guard_command(args: argparse.Namespace, guard_json_path: str) -> List
 
 
 def _run_guard_command(command: List[str]) -> Dict[str, Any]:
-    process = subprocess.run(command, text=True, encoding="utf-8", errors="replace")
+    process = subprocess.run(command, text=True, capture_output=True, encoding="utf-8", errors="replace")
+    if process.stdout:
+        _write_text_safe(sys.stdout, process.stdout)
     if process.returncode != 0:
+        if process.stderr:
+            _write_text_safe(sys.stderr, process.stderr)
         raise RuntimeError(f"scdp_compare_guard.py failed with exit code {process.returncode}")
     return {
         "returncode": process.returncode,
-        "stdout": "",
-        "stderr": "",
+        "stdout": process.stdout,
+        "stderr": process.stderr,
     }
 
 
@@ -3870,17 +3374,15 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--compare-mode", choices=["both", "markdown", "storage"], default="both")
     parser.add_argument("--split-level", type=int, choices=range(1, 7), default=1, help="Markdown heading level to split for guard compare")
-    parser.add_argument("--anchor-start-name", default=_DEFAULT_MANAGED_ANCHOR_START, help="Confluence Anchor macro name marking the start of the managed document region")
-    parser.add_argument("--anchor-end-name", default=_DEFAULT_MANAGED_ANCHOR_END, help="Confluence Anchor macro name marking the end of the managed document region")
     parser.add_argument("--apply", action="store_true", help="Run actual overwrite publish after compare")
     parser.add_argument("--yes", action="store_true", help="Pass --yes to guard script")
     parser.add_argument("--force-scdp-override", action="store_true", help="Pass override gate to guard script")
     parser.add_argument("--yes-override", action="store_true", help="Skip override prompt")
     parser.add_argument("--no-prompt-override", action="store_true", help="Do not prompt for override in compare-only runs")
     parser.add_argument(
-        "--allow-full-page-fallback",
+        "--no-prompt-missing-heading",
         action="store_true",
-        help="Allow auto/guard logic to fall back to full-page overwrite when section-safe publish is not possible",
+        help="Do not prompt when the requested heading is missing from local markdown.",
     )
     parser.add_argument(
         "--require-visible-inline-markers",
@@ -3926,13 +3428,6 @@ def main() -> int:
     requested_heading_title = str(args.heading_title or "").strip()
     if requested_heading_title.lower() == "auto":
         page_info_for_resolution = _fetch_page_storage_with_auth(args, config_module)
-        anchor_region_available = bool(
-            _find_anchor_region_span(
-                page_info_for_resolution["storage_html"],
-                args.anchor_start_name,
-                args.anchor_end_name,
-            )
-        )
         baseline_payload = _load_auto_heading_baseline(args.output_dir, args.page_id, resolved_md_path, args.split_level)
         marker = _fetch_publish_marker_with_auth(args, config_module)
         baseline_markdown = None
@@ -3962,11 +3457,14 @@ def main() -> int:
             baseline_markdown=baseline_markdown,
             baseline_sections_by_title=baseline_sections_by_title,
         )
-        args.heading_title = _select_auto_publish_target(
-            changed_titles,
-            allow_full_page_fallback=bool(args.allow_full_page_fallback),
-            anchor_region_available=anchor_region_available,
-        )
+        if not changed_titles:
+            raise SystemExit(
+                "Unable to auto-resolve a changed heading because no split-level section differs from the current page. "
+                "Pass --heading-title explicitly."
+            )
+        if len(changed_titles) > 1:
+            return _run_multi_heading_publish(args, changed_titles)
+        args.heading_title = changed_titles[0]
     else:
         args.heading_title = requested_heading_title
 
@@ -3986,9 +3484,9 @@ def main() -> int:
     print(f"[source] Markdown file: {resolved_md_path}")
     if requested_heading_title.lower() == "auto":
         print("[source] Requested heading title: auto")
-        print(f"[source] Auto-resolved heading title: {_display_heading_target(args.heading_title)}")
+        print(f"[source] Auto-resolved heading title: {args.heading_title}")
     else:
-        print(f"[source] Heading title: {_display_heading_target(args.heading_title)}")
+        print(f"[source] Heading title: {args.heading_title}")
     print(
         "[source] Last modified: "
         + dt.datetime.fromtimestamp(os.path.getmtime(resolved_md_path), dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -4007,18 +3505,14 @@ def main() -> int:
             page_info_before = _fetch_page_storage_with_auth(args, config_module)
             storage_before = page_info_before["storage_html"]
             old_markers_all = _extract_inline_markers(storage_before)
-            section_span_before = _find_target_storage_span(
-                storage_before,
-                args.heading_title,
-                args.split_level,
-                args.anchor_start_name,
-                args.anchor_end_name,
+            section_span_before = _find_heading_section_span(
+                storage_before, args.heading_title, heading_level=args.split_level
             )
             if section_span_before is not None:
                 old_markers = _filter_markers_by_span(old_markers_all, section_span_before)
                 old_section_html = storage_before[section_span_before[0]:section_span_before[1]]
                 print(
-                    f"[anchor-preserve] Found {len(old_markers)} inline marker(s) in target '{args.heading_title}' before overwrite."
+                    f"[anchor-preserve] Found {len(old_markers)} inline marker(s) in heading '{args.heading_title}' before overwrite."
                 )
                 _record_comment_ref_heading_ownership(
                     args.output_dir,
@@ -4029,15 +3523,14 @@ def main() -> int:
             else:
                 old_markers = old_markers_all
                 print(
-                    f"[anchor-preserve] Target '{args.heading_title}' not found in old storage; using all {len(old_markers)} inline marker(s)."
+                    f"[anchor-preserve] Heading '{args.heading_title}' not found in old storage; using all {len(old_markers)} inline marker(s)."
                 )
-
-            inline_props = _fetch_inline_properties_with_fallback_auth(args, config_module, open_ref_ids)
-            before_inline_props = list(inline_props)
 
             # If marker tags were removed in prior runs, recover marker refs and
             # anchor text from Confluence inlineProperties for active comments.
             if section_span_before is not None and open_ref_ids:
+                inline_props = _fetch_inline_properties_with_fallback_auth(args, config_module, open_ref_ids)
+                before_inline_props = list(inline_props)
                 owned_refs = _resolve_owned_comment_refs_for_heading(
                     args.output_dir,
                     args.page_id,
@@ -4083,12 +3576,6 @@ def main() -> int:
                     print(
                         f"[anchor-preserve] Refined {history_enriched} marker(s) from historical compare artifacts."
                     )
-            old_markers, orphan_seeded = _seed_missing_orphan_markers(old_markers, before_inline_props)
-            supplemented += orphan_seeded
-            if orphan_seeded:
-                print(
-                    f"[anchor-preserve] Seeded {orphan_seeded} top-of-page orphan marker(s) from inline comment metadata."
-                )
         except Exception as exc:
             print(f"[anchor-preserve] Warning: could not fetch page storage before overwrite: {exc}")
 
@@ -4153,12 +3640,10 @@ def main() -> int:
             page_info_after_storage = _fetch_page_storage_with_auth(args, config_module)
             saved_storage_after = page_info_after_storage.get("storage_html") or ""
             _save_text(saved_storage_after_reanchor_path, saved_storage_after)
-            saved_section_span = _find_target_storage_span(
+            saved_section_span = _find_heading_section_span(
                 saved_storage_after,
                 args.heading_title,
-                args.split_level,
-                args.anchor_start_name,
-                args.anchor_end_name,
+                heading_level=args.split_level,
             )
             saved_section_html = (
                 saved_storage_after

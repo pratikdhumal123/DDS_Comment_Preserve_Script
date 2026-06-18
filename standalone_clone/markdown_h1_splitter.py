@@ -23,6 +23,9 @@ from confluence_h1_client_core import ConfluenceClient
 from config import SPACE_KEY
 
 
+_HEADING_PATH_SEPARATOR = " > "
+
+
 class MarkdownH1Splitter:
     def __init__(self):
         self.client = ConfluenceClient()
@@ -45,10 +48,12 @@ class MarkdownH1Splitter:
 
         sections: List[Dict[str, str]] = []
         current_title = None
+        current_path: List[str] = []
         current_lines: List[str] = []
         preface: List[str] = []
         in_fenced_code = False
         heading_pattern = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+        heading_stack: List[Tuple[int, str]] = []
 
         for line in lines:
             if re.match(r"^\s*(```|~~~)", line):
@@ -63,6 +68,10 @@ class MarkdownH1Splitter:
                 heading_match = heading_pattern.match(line)
                 if heading_match:
                     heading_level = len(heading_match.group(1))
+                    heading_text = heading_match.group(2).strip() or f"Section {len(sections) + 1}"
+                    while heading_stack and int(heading_stack[-1][0]) >= heading_level:
+                        heading_stack.pop()
+                    heading_stack.append((heading_level, heading_text))
 
                     # Split ONLY on the selected heading level; keep other levels inside same page.
                     if heading_level != split_level:
@@ -77,10 +86,13 @@ class MarkdownH1Splitter:
                             {
                                 "title": current_title,
                                 "markdown": "\n".join(current_lines).strip(),
+                                "path": list(current_path),
+                                "path_key": _HEADING_PATH_SEPARATOR.join(current_path),
                             }
                         )
 
-                    current_title = heading_match.group(2).strip() or f"Section {len(sections) + 1}"
+                    current_title = heading_text
+                    current_path = [item[1] for item in heading_stack]
                     current_lines = []
                     continue
 
@@ -94,6 +106,8 @@ class MarkdownH1Splitter:
                 {
                     "title": current_title,
                     "markdown": "\n".join(current_lines).strip(),
+                    "path": list(current_path),
+                    "path_key": _HEADING_PATH_SEPARATOR.join(current_path),
                 }
             )
 
@@ -105,6 +119,8 @@ class MarkdownH1Splitter:
                 {
                     "title": os.path.splitext(os.path.basename(md_path))[0] or "Document",
                     "markdown": "\n".join(preface).strip(),
+                    "path": [os.path.splitext(os.path.basename(md_path))[0] or "Document"],
+                    "path_key": os.path.splitext(os.path.basename(md_path))[0] or "Document",
                 }
             )
 

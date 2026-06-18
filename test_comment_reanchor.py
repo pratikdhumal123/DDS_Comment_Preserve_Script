@@ -5,7 +5,7 @@ import unittest
 
 from comment_preserve_publish import _enrich_markers_from_history, _inject_inline_markers, _supplement_markers_from_history
 from comment_preserve_publish import _record_comment_ref_heading_ownership, _resolve_owned_comment_refs_for_heading
-from comment_preserve_publish import _supplement_markers_from_inline_properties
+from comment_preserve_publish import _seed_missing_orphan_markers, _supplement_markers_from_inline_properties
 
 
 class CommentReanchorTests(unittest.TestCase):
@@ -47,6 +47,55 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(len(markers), 1)
         self.assertEqual(markers[0]["ref"], "ref-owned-1")
         self.assertEqual(markers[0]["anchor_html"], "infrastructure")
+
+    def test_missing_orphan_refs_are_seeded_even_when_other_markers_exist(self):
+        markers, supplemented = _seed_missing_orphan_markers(
+            [
+                {
+                    "ref": "ref-existing-1",
+                    "anchor_html": "Existing text",
+                    "left_context": "",
+                    "right_context": "",
+                    "start": 0,
+                    "end": 13,
+                }
+            ],
+            [
+                {"ref": "ref-existing-1", "anchor_html": "Existing text"},
+                {"ref": "ref-missing-2", "anchor_html": "Deleted text"},
+            ],
+        )
+
+        self.assertEqual(supplemented, 1)
+        self.assertEqual(len(markers), 2)
+        self.assertEqual(markers[1]["ref"], "ref-missing-2")
+        self.assertEqual(markers[1]["anchor_html"], "\u200b")
+        self.assertTrue(markers[1].get("orphan_seeded"))
+
+    def test_orphan_seeded_marker_reinjects_with_empty_character(self):
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            "<h2>Surviving Section</h2><p>Current content remains.</p>",
+            [
+                {
+                    "ref": "ref-orphan-seeded-1",
+                    "anchor_html": "\u200b",
+                    "left_context": "",
+                    "right_context": "",
+                    "start": 0,
+                    "end": 0,
+                    "heading_path": [],
+                    "orphan_seeded": True,
+                }
+            ],
+            open_ref_ids=set(),
+            section_span=(0, len("<h2>Surviving Section</h2><p>Current content remains.</p>")),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 1)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-orphan-seeded-1">\u200b</ac:inline-comment-marker>'))
+        self.assertNotIn('&#128172;', updated)
 
     def test_heading_ownership_baseline_records_and_resolves_refs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -335,6 +384,108 @@ class CommentReanchorTests(unittest.TestCase):
         )
         self.assertNotIn(
             '<h2><ac:inline-comment-marker ac:ref="ref-deleted-1">Testcase</ac:inline-comment-marker></h2>',
+            updated,
+        )
+
+    def test_deleted_parent_heading_keeps_child_content_comment_in_surviving_child_section(self):
+        old_storage = (
+            '<h1>Physical Design</h1>'
+            '<h2>Hardware Overview</h2>'
+            '<p>Alpha old beta.</p>'
+            '<h1>Operations</h1>'
+            '<p>Alpha old beta.</p>'
+        )
+        new_storage = (
+            '<h2>Hardware Overview</h2>'
+            '<p>Alpha new beta.</p>'
+            '<h1>Operations</h1>'
+            '<p>Alpha old beta.</p>'
+        )
+
+        anchor = 'old'
+        anchor_start = old_storage.index('<p>Alpha old beta.</p>') + len('<p>Alpha ')
+        marker = {
+            'ref': 'ref-parent-deleted-word-1',
+            'anchor_html': anchor,
+            'left_context': old_storage[max(0, anchor_start - 80):anchor_start],
+            'right_context': old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+            'start': anchor_start,
+            'end': anchor_start + len(anchor),
+            'heading_path': [
+                {'level': 1, 'text': 'Physical Design', 'normalized_text': 'physical design'},
+                {'level': 2, 'text': 'Hardware Overview', 'normalized_text': 'hardware overview'},
+            ],
+        }
+
+        section_end = new_storage.index('<h1>Operations</h1>')
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, section_end),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h2>Hardware Overview</h2><p>Alpha <ac:inline-comment-marker ac:ref="ref-parent-deleted-word-1">new</ac:inline-comment-marker> beta.</p>',
+            updated,
+        )
+        self.assertNotIn(
+            '<h1>Operations</h1><p>Alpha <ac:inline-comment-marker ac:ref="ref-parent-deleted-word-1">old</ac:inline-comment-marker> beta.</p>',
+            updated,
+        )
+
+    def test_deleted_h3_heading_falls_back_to_parent_h2_in_same_branch(self):
+        old_storage = (
+            '<h1>Physical Design</h1>'
+            '<h2>Physical Topology</h2>'
+            '<h3>External Connectivity</h3>'
+            '<p>Deleted sentence lives here.</p>'
+            '<h2>Hardware Overview</h2>'
+            '<p>Other branch remains.</p>'
+        )
+        new_storage = (
+            '<h1>Physical Design</h1>'
+            '<h2>Physical Topology</h2>'
+            '<p>Topology summary remains.</p>'
+            '<h2>Hardware Overview</h2>'
+            '<p>Other branch remains.</p>'
+        )
+
+        anchor = 'Deleted sentence lives here.'
+        anchor_start = old_storage.index(anchor)
+        marker = {
+            'ref': 'ref-h3-deleted-1',
+            'anchor_html': anchor,
+            'left_context': old_storage[max(0, anchor_start - 80):anchor_start],
+            'right_context': old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+            'start': anchor_start,
+            'end': anchor_start + len(anchor),
+            'heading_path': [
+                {'level': 1, 'text': 'Physical Design', 'normalized_text': 'physical design'},
+                {'level': 2, 'text': 'Physical Topology', 'normalized_text': 'physical topology'},
+                {'level': 3, 'text': 'External Connectivity', 'normalized_text': 'external connectivity'},
+            ],
+        }
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h2><ac:inline-comment-marker ac:ref="ref-h3-deleted-1">Physical Topology</ac:inline-comment-marker></h2>',
+            updated,
+        )
+        self.assertNotIn(
+            '<h2><ac:inline-comment-marker ac:ref="ref-h3-deleted-1">Hardware Overview</ac:inline-comment-marker></h2>',
             updated,
         )
 
@@ -805,6 +956,396 @@ class CommentReanchorTests(unittest.TestCase):
             '<h3>Other Heading</h3><p><ac:inline-comment-marker ac:ref="ref-duplicate-delete-1">',
             updated,
         )
+
+    def test_heading_rename_preserves_heading_and_internal_comment_context(self):
+        old_storage = (
+            "<h2>Policy Naming Conventions</h2>"
+            "<p>Last Update: 17 June 2026, 10:01 AM</p>"
+            "<p>comment 11</p>"
+        )
+        new_storage = (
+            "<h2>Policy Naming Standard</h2>"
+            "<p>Last Update: 17 June 2026, 10:01 AM</p>"
+            "<p>comment 11 updated</p>"
+        )
+
+        heading_anchor = "Policy Naming Conventions"
+        heading_start = old_storage.index(heading_anchor)
+        markers = [
+            {
+                "ref": "ref-rename-heading",
+                "anchor_html": heading_anchor,
+                "left_context": old_storage[max(0, heading_start - 80):heading_start],
+                "right_context": old_storage[heading_start + len(heading_anchor):heading_start + len(heading_anchor) + 80],
+                "start": heading_start,
+                "end": heading_start + len(heading_anchor),
+            },
+            {
+                "ref": "ref-rename-body",
+                "anchor_html": "comment 11",
+                "left_context": "Last Update: 17 June 2026, 10:01 AM</p><p>",
+                "right_context": "</p>",
+                "start": old_storage.index("comment 11"),
+                "end": old_storage.index("comment 11") + len("comment 11"),
+            },
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 2)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn('ref="ref-rename-heading"', updated)
+        self.assertIn('ref="ref-rename-body"', updated)
+        self.assertIn(
+            '<h2><ac:inline-comment-marker ac:ref="ref-rename-heading">Policy Naming Standard</ac:inline-comment-marker></h2>',
+            updated,
+        )
+        self.assertIn(
+            '<p><ac:inline-comment-marker ac:ref="ref-rename-body">comment 11</ac:inline-comment-marker> updated</p>',
+            updated,
+        )
+
+    def test_nested_heading_rename_keeps_heading_comment_on_renamed_h3_in_same_branch(self):
+        old_storage = (
+            '<h1>Physical Design</h1>'
+            '<h2>Physical Topology</h2>'
+            '<h3>External Connectivity</h3>'
+            '<p>Edge uplinks connect leaf nodes.</p>'
+            '<h3>Management Plane</h3>'
+            '<p>Management remains separate.</p>'
+        )
+        new_storage = (
+            '<h1>Physical Design</h1>'
+            '<h2>Physical Topology</h2>'
+            '<h3>External Network Connectivity</h3>'
+            '<p>Edge uplinks connect leaf nodes with updated routing.</p>'
+            '<h3>Management Plane</h3>'
+            '<p>Management remains separate.</p>'
+        )
+
+        heading_anchor = 'External Connectivity'
+        heading_start = old_storage.index(heading_anchor)
+        markers = [
+            {
+                'ref': 'ref-rename-nested-heading',
+                'anchor_html': heading_anchor,
+                'left_context': old_storage[max(0, heading_start - 80):heading_start],
+                'right_context': old_storage[heading_start + len(heading_anchor):heading_start + len(heading_anchor) + 80],
+                'start': heading_start,
+                'end': heading_start + len(heading_anchor),
+                'heading_path': [
+                    {'level': 1, 'text': 'Physical Design', 'normalized_text': 'physical design'},
+                    {'level': 2, 'text': 'Physical Topology', 'normalized_text': 'physical topology'},
+                    {'level': 3, 'text': 'External Connectivity', 'normalized_text': 'external connectivity'},
+                ],
+            },
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h3><ac:inline-comment-marker ac:ref="ref-rename-nested-heading">External Network Connectivity</ac:inline-comment-marker></h3>',
+            updated,
+        )
+        self.assertNotIn(
+            '<h3><ac:inline-comment-marker ac:ref="ref-rename-nested-heading">Management Plane</ac:inline-comment-marker></h3>',
+            updated,
+        )
+
+    def test_deleted_main_heading_places_comment_below_surviving_upper_heading(self):
+        old_storage = (
+            "<h1>Intro</h1>"
+            "<h2>Removed Heading</h2>"
+            "<p>Deleted sentence.</p>"
+            "<h2>Keep</h2>"
+            "<p>Body.</p>"
+        )
+        new_storage = (
+            "<h1>Intro</h1>"
+            "<h2>Keep</h2>"
+            "<p>Body.</p>"
+        )
+
+        anchor = "Deleted sentence."
+        anchor_start = old_storage.index(anchor)
+        markers = [
+            {
+                "ref": "ref-main-heading-delete-1",
+                "anchor_html": anchor,
+                "left_context": old_storage[max(0, anchor_start - 80):anchor_start],
+                "right_context": old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+                "start": anchor_start,
+                "end": anchor_start + len(anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Intro", "normalized_text": "intro"},
+                    {"level": 2, "text": "Removed Heading", "normalized_text": "removed heading"},
+                ],
+            }
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertEqual(
+            updated,
+            '<h1>Intro</h1><ac:inline-comment-marker ac:ref="ref-main-heading-delete-1">\u200b</ac:inline-comment-marker><h2>Keep</h2><p>Body.</p>',
+        )
+
+    def test_deleted_heading_path_pins_comment_to_top_of_scope_with_blank_icon(self):
+        new_storage = (
+            "<h2>Surviving Section</h2>"
+            "<p>Current content remains.</p>"
+        )
+        markers = [
+            {
+                "ref": "ref-deleted-heading-top",
+                "anchor_html": "Deleted heading text.",
+                "left_context": "<h2>Removed Section</h2><p>",
+                "right_context": "</p>",
+                "start": 0,
+                "end": len("Deleted heading text."),
+                "heading_path": [
+                    {"level": 2, "text": "Removed Section", "normalized_text": "removed section"},
+                ],
+            }
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-heading-top">'))
+        self.assertIn('\u200b', updated)
+
+    def test_deleted_heading_fallback_keeps_blank_target_when_heading_has_no_visible_text(self):
+        new_storage = (
+            "<h2>\u200b</h2>"
+            "<p>Current content remains.</p>"
+        )
+        markers = [
+            {
+                "ref": "ref-deleted-heading-empty-target",
+                "anchor_html": "Deleted heading text.",
+                "left_context": "<h2>Removed Section</h2><p>",
+                "right_context": "</p>",
+                "start": 0,
+                "end": len("Deleted heading text."),
+            }
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h2><ac:inline-comment-marker ac:ref="ref-deleted-heading-empty-target">\u200b</ac:inline-comment-marker></h2>',
+            updated,
+        )
+
+    def test_deleted_top_level_heading_pins_orphan_comment_to_top_of_document(self):
+        old_storage = (
+            "<h1>Logical Design</h1>"
+            "<p>Deleted body text.</p>"
+            "<h1>ACI Hardening</h1>"
+            "<p>Surviving content.</p>"
+        )
+        new_storage = (
+            "<h1>ACI Hardening</h1>"
+            "<p>Surviving content.</p>"
+        )
+        anchor = "Deleted body text."
+        anchor_start = old_storage.index(anchor)
+        markers = [
+            {
+                "ref": "ref-deleted-h1-top",
+                "anchor_html": anchor,
+                "left_context": old_storage[max(0, anchor_start - 80):anchor_start],
+                "right_context": old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+                "start": anchor_start,
+                "end": anchor_start + len(anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            }
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-h1-top">\u200b</ac:inline-comment-marker><h1>ACI Hardening</h1>'))
+
+    def test_h1_heading_rename_preserves_heading_and_internal_comment_context(self):
+        old_storage = (
+            "<h1>Logical Design</h1>"
+            "<p>comment 11</p>"
+        )
+        new_storage = (
+            "<h1>Demo Text</h1>"
+            "<p>comment 11 updated</p>"
+        )
+
+        heading_anchor = "Logical Design"
+        heading_start = old_storage.index(heading_anchor)
+        markers = [
+            {
+                "ref": "ref-rename-h1-heading",
+                "anchor_html": heading_anchor,
+                "left_context": old_storage[max(0, heading_start - 80):heading_start],
+                "right_context": old_storage[heading_start + len(heading_anchor):heading_start + len(heading_anchor) + 80],
+                "start": heading_start,
+                "end": heading_start + len(heading_anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            },
+            {
+                "ref": "ref-rename-h1-body",
+                "anchor_html": "comment 11",
+                "left_context": "</h1><p>",
+                "right_context": "</p>",
+                "start": old_storage.index("comment 11"),
+                "end": old_storage.index("comment 11") + len("comment 11"),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            },
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 2)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h1><ac:inline-comment-marker ac:ref="ref-rename-h1-heading">Demo Text</ac:inline-comment-marker></h1>',
+            updated,
+        )
+        self.assertIn(
+            '<p><ac:inline-comment-marker ac:ref="ref-rename-h1-body">comment 11</ac:inline-comment-marker> updated</p>',
+            updated,
+        )
+
+    def test_h1_renamed_body_comment_becomes_orphan_when_duplicate_text_exists_under_other_h1(self):
+        old_storage = (
+            "<h1>Logical Design</h1>"
+            "<p>Shared anchor sentence.</p>"
+            "<h1>Other Heading</h1>"
+            "<p>Shared anchor sentence.</p>"
+        )
+        new_storage = (
+            "<h1>Other Heading</h1>"
+            "<p>Shared anchor sentence.</p>"
+            "<h1>Demo Text</h1>"
+            "<p>Shared anchor sentence.</p>"
+        )
+
+        anchor = "Shared anchor sentence."
+        anchor_start = old_storage.index(anchor)
+        markers = [
+            {
+                "ref": "ref-rename-h1-duplicate-body",
+                "anchor_html": anchor,
+                "left_context": old_storage[max(0, anchor_start - 80):anchor_start],
+                "right_context": old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+                "start": anchor_start,
+                "end": anchor_start + len(anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            },
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertTrue(
+            updated.startswith('<ac:inline-comment-marker ac:ref="ref-rename-h1-duplicate-body">\u200b</ac:inline-comment-marker>')
+        )
+        self.assertNotIn(
+            '<h1>Other Heading</h1><p><ac:inline-comment-marker ac:ref="ref-rename-h1-duplicate-body">Shared anchor sentence.</ac:inline-comment-marker></p>',
+            updated,
+        )
+
+    def test_empty_anchor_comment_is_pinned_to_top_of_page_scope(self):
+        new_storage = (
+            "<h2>Surviving Section</h2>"
+            "<p>Current content remains.</p>"
+        )
+        markers = [
+            {
+                "ref": "ref-orphan-top",
+                "anchor_html": "&#128172;",
+                "left_context": "",
+                "right_context": "",
+                "start": 0,
+                "end": 0,
+            }
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 1)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-orphan-top">\u200b</ac:inline-comment-marker>'))
+        self.assertIn('<h2>Surviving Section</h2>', updated)
 
 
 if __name__ == "__main__":

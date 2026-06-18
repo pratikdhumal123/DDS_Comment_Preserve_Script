@@ -38,6 +38,11 @@ from table_image_highlighter import (
     try_highlight_table_cell_diff as _table_image_try_highlight_table_cell_diff,
     try_highlight_table_row as _table_image_try_highlight_table_row,
 )
+_FULL_PAGE_AUTO_SENTINEL = "__AUTO_FULL_PAGE__"
+_ANCHOR_REGION_AUTO_SENTINEL = "__AUTO_ANCHOR_REGION__"
+_HEADING_PATH_SEPARATOR = " > "
+_DEFAULT_MANAGED_ANCHOR_START = "docautomation_start"
+_DEFAULT_MANAGED_ANCHOR_END = "docautomation_end"
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
@@ -89,6 +94,13 @@ def _decompress_text(value: str) -> str:
         return gzip.decompress(raw).decode("utf-8")
     except Exception:
         return value
+
+
+def _html_to_plain_text(value: str) -> str:
+    text = html.unescape(value or "")
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return text.strip()
 
 
 def _json_size_bytes(value: Any) -> int:
@@ -564,7 +576,12 @@ def _resolve_heading_title(
 ) -> Optional[Dict[str, Any]]:
     requested = requested_title.strip().lower()
     exact = next(
-        (section for section in sections if str(section.get("title", "")).strip().lower() == requested),
+        (
+            section
+            for section in sections
+            if str(section.get("path_key") or "").strip().lower() == requested
+            or str(section.get("title", "")).strip().lower() == requested
+        ),
         None,
     )
     if exact is not None:
@@ -573,7 +590,7 @@ def _resolve_heading_title(
     if no_prompt_missing_heading:
         return None
 
-    available = [str(section.get("title", "")).strip() for section in sections]
+    available = [str(section.get("path_key") or section.get("title", "")).strip() for section in sections]
     print("\n⚠️ Requested heading not found in local markdown file.")
     print(f"Requested: {requested_title}")
     print("Available headings:")
@@ -585,9 +602,18 @@ def _resolve_heading_title(
         return None
 
     return next(
-        (section for section in sections if str(section.get("title", "")).strip().lower() == entered.lower()),
+        (
+            section
+            for section in sections
+            if str(section.get("path_key") or "").strip().lower() == entered.lower()
+            or str(section.get("title", "")).strip().lower() == entered.lower()
+        ),
         None,
     )
+
+
+def _split_heading_path(value: str) -> List[str]:
+    return [part.strip() for part in str(value or "").split(_HEADING_PATH_SEPARATOR) if part.strip()]
 
 
 def _normalize_heading_match_key(value: str) -> str:
@@ -625,7 +651,8 @@ def _find_heading_section_bounds(
     - section_end: next heading start or end of document
     """
     html_text = str(storage_html or "")
-    target = _normalize_heading_match_key(heading_title)
+    target_path = _split_heading_path(heading_title)
+    target = _normalize_heading_match_key(target_path[-1] if target_path else heading_title)
     if not html_text or not target:
         return None
 
@@ -634,12 +661,29 @@ def _find_heading_section_bounds(
     if not matches:
         return None
 
+    path_stack: List[Tuple[int, str, str]] = []
+    candidate_paths: List[List[str]] = []
+    relaxed_candidate_paths: List[List[str]] = []
+    for match in matches:
+        current_level = int(match.group(1)[1:])
+        heading_text = _normalize_heading_match_key(match.group(2))
+        relaxed_heading_text = _relax_heading_match_key(match.group(2))
+        while path_stack and int(path_stack[-1][0]) >= current_level:
+            path_stack.pop()
+        path_stack.append((current_level, heading_text, relaxed_heading_text))
+        candidate_paths.append([item[1] for item in path_stack])
+        relaxed_candidate_paths.append([item[2] for item in path_stack])
+
+    normalized_target_path = [_normalize_heading_match_key(part) for part in target_path] if target_path else []
+
     for idx, match in enumerate(matches):
         current_level = int(match.group(1)[1:])
         if heading_level is not None and current_level != heading_level:
             continue
         heading_text = _normalize_heading_match_key(match.group(2))
         if heading_text != target:
+            continue
+        if normalized_target_path and candidate_paths[idx] != normalized_target_path:
             continue
         heading_start = match.start()
         body_start = match.end()
@@ -657,9 +701,10 @@ def _find_heading_section_bounds(
             "section_end": section_end,
         }
 
-    relaxed_target = _relax_heading_match_key(heading_title)
+    relaxed_target = _relax_heading_match_key(target_path[-1] if target_path else heading_title)
     if not relaxed_target or relaxed_target == target:
         return None
+    relaxed_target_path = [_relax_heading_match_key(part) for part in target_path] if target_path else []
 
     relaxed_matches: List[Tuple[int, Any]] = []
     for idx, match in enumerate(matches):
@@ -668,6 +713,8 @@ def _find_heading_section_bounds(
             continue
         heading_text = _relax_heading_match_key(match.group(2))
         if heading_text == relaxed_target:
+            if relaxed_target_path and relaxed_candidate_paths[idx] != relaxed_target_path:
+                continue
             relaxed_matches.append((idx, match))
 
     if len(relaxed_matches) != 1:
@@ -699,6 +746,91 @@ def _replace_heading_section_body(
     heading_level: Optional[int] = None,
 ) -> Optional[str]:
     bounds = _find_heading_section_bounds(storage_html, heading_title, heading_level=heading_level)
+    if bounds is None:
+        return None
+    body_start = int(bounds["body_start"])
+    section_end = int(bounds["section_end"])
+    return storage_html[:body_start] + str(new_body_html or "") + storage_html[section_end:]
+
+
+def _normalize_anchor_macro_name(value: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(str(value or ""))).strip().lower()
+
+
+def _iter_anchor_macro_blocks(storage_html: str) -> List[Dict[str, Any]]:
+    html_text = str(storage_html or "")
+    paragraph_re = re.compile(
+        r"<p\b[^>]*>\s*(<ac:structured-macro\b[^>]*ac:name=(['\"])anchor\2[^>]*>.*?<ac:parameter\b[^>]*>(.*?)</ac:parameter>.*?</ac:structured-macro>)\s*</p>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    raw_re = re.compile(
+        r"<ac:structured-macro\b[^>]*ac:name=(['\"])anchor\1[^>]*>.*?<ac:parameter\b[^>]*>(.*?)</ac:parameter>.*?</ac:structured-macro>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    blocks: List[Dict[str, Any]] = []
+    for match in paragraph_re.finditer(html_text):
+        blocks.append(
+            {
+                "start": match.start(),
+                "end": match.end(),
+                "anchor_name": _normalize_anchor_macro_name(_html_to_plain_text(match.group(3))),
+            }
+        )
+    if blocks:
+        return blocks
+
+    for match in raw_re.finditer(html_text):
+        blocks.append(
+            {
+                "start": match.start(),
+                "end": match.end(),
+                "anchor_name": _normalize_anchor_macro_name(_html_to_plain_text(match.group(2))),
+            }
+        )
+    return blocks
+
+
+def _find_anchor_region_bounds(
+    storage_html: str,
+    start_anchor_name: str,
+    end_anchor_name: str,
+) -> Optional[Dict[str, int]]:
+    start_name = _normalize_anchor_macro_name(start_anchor_name)
+    end_name = _normalize_anchor_macro_name(end_anchor_name)
+    if not storage_html or not start_name or not end_name:
+        return None
+
+    blocks = _iter_anchor_macro_blocks(storage_html)
+    start_block = next((block for block in blocks if block.get("anchor_name") == start_name), None)
+    if start_block is None:
+        return None
+
+    end_block = next(
+        (
+            block
+            for block in blocks
+            if block.get("anchor_name") == end_name and int(block.get("start") or 0) >= int(start_block.get("end") or 0)
+        ),
+        None,
+    )
+    if end_block is None:
+        return None
+
+    return {
+        "heading_start": int(start_block.get("start") or 0),
+        "body_start": int(start_block.get("end") or 0),
+        "section_end": int(end_block.get("start") or 0),
+    }
+
+
+def _replace_anchor_region_body(
+    storage_html: str,
+    new_body_html: str,
+    start_anchor_name: str,
+    end_anchor_name: str,
+) -> Optional[str]:
+    bounds = _find_anchor_region_bounds(storage_html, start_anchor_name, end_anchor_name)
     if bounds is None:
         return None
     body_start = int(bounds["body_start"])
@@ -2630,6 +2762,8 @@ def main() -> None:
     parser.add_argument("--md-path", required=True, help="Local markdown file path")
     parser.add_argument("--heading-title", default=None, help="Heading title to match (defaults to page title)")
     parser.add_argument("--split-level", type=int, default=1, choices=range(1, 7), help="Heading level split for local markdown")
+    parser.add_argument("--anchor-start-name", default=_DEFAULT_MANAGED_ANCHOR_START, help="Confluence Anchor macro name marking the start of the managed document region")
+    parser.add_argument("--anchor-end-name", default=_DEFAULT_MANAGED_ANCHOR_END, help="Confluence Anchor macro name marking the end of the managed document region")
     parser.add_argument("--context-lines", type=int, default=3, help="Unified diff context lines")
     parser.add_argument(
         "--compare-mode",
@@ -2641,6 +2775,7 @@ def main() -> None:
     parser.add_argument("--force-scdp-override", action="store_true", help="Allow override when drift is detected")
     parser.add_argument("--no-prompt-override", action="store_true", help="Do not ask for override interactively")
     parser.add_argument("--no-prompt-missing-heading", action="store_true", help="Do not ask for alternate heading when requested one is missing")
+    parser.add_argument("--allow-full-page-fallback", action="store_true", help="Allow fallback to full-page overwrite when a safe heading-scoped publish is not possible")
     parser.add_argument("--apply", action="store_true", help="Update the same SCDP page after compare if allowed")
     parser.add_argument("--yes", action="store_true", help="Skip final update confirmation prompt")
     parser.add_argument("--yes-override", action="store_true", help="Skip override confirmation prompt (only with --apply and --force-scdp-override)")
@@ -2719,21 +2854,29 @@ def main() -> None:
     reflection_present_on_page = previous_storage != (raw_previous_storage or "").strip()
 
     sections = splitter.parse_sections(args.md_path, split_level=args.split_level)
+    full_page_requested = str(args.heading_title or "").strip() == _FULL_PAGE_AUTO_SENTINEL
+    anchor_region_requested = str(args.heading_title or "").strip() == _ANCHOR_REGION_AUTO_SENTINEL
     target_title = (args.heading_title or page_title).strip().lower()
-    local_section = _resolve_heading_title(
-        sections=sections,
-        requested_title=(args.heading_title or page_title),
-        no_prompt_missing_heading=bool(args.no_prompt_missing_heading),
-    )
-    if local_section is None:
-        available = [str(section.get("title", "")) for section in sections]
-        raise SystemExit(
-            f"Heading '{target_title}' not found in {args.md_path}. Available headings: {available}"
+    if full_page_requested or anchor_region_requested:
+        with open(args.md_path, "r", encoding="utf-8") as _md_file:
+            section_markdown_body = _md_file.read()
+        section_title = page_title.strip() or "Document"
+        current_markdown = section_markdown_body.strip() + ("\n" if section_markdown_body.strip() else "")
+    else:
+        local_section = _resolve_heading_title(
+            sections=sections,
+            requested_title=(args.heading_title or page_title),
+            no_prompt_missing_heading=bool(args.no_prompt_missing_heading),
         )
+        if local_section is None:
+            available = [str(section.get("title", "")) for section in sections]
+            raise SystemExit(
+                f"Heading '{target_title}' not found in {args.md_path}. Available headings: {available}"
+            )
 
-    section_title = str(local_section.get("title") or page_title).strip() or page_title
-    section_markdown_body = str(local_section.get("markdown") or "")
-    current_markdown = section_markdown_body.strip() + ("\n" if section_markdown_body.strip() else "")
+        section_title = str(local_section.get("title") or page_title).strip() or page_title
+        section_markdown_body = str(local_section.get("markdown") or "")
+        current_markdown = section_markdown_body.strip() + ("\n" if section_markdown_body.strip() else "")
 
     image_src_map: Dict[str, Any] = {}
     try:
@@ -2878,25 +3021,54 @@ def main() -> None:
 
     current_storage = splitter.markdown_to_html(section_markdown_body, image_src_map=image_src_map)
 
-    section_bounds = _find_heading_section_bounds(
-        previous_storage,
-        section_title,
-        heading_level=args.split_level,
-    )
     previous_section_storage = previous_storage
     publish_storage = previous_storage
+    fallback_full_page_mode = bool(full_page_requested)
+    if full_page_requested:
+        section_bounds = None
+    elif anchor_region_requested:
+        section_bounds = _find_anchor_region_bounds(
+            previous_storage,
+            args.anchor_start_name,
+            args.anchor_end_name,
+        )
+    else:
+        section_bounds = _find_heading_section_bounds(
+            previous_storage,
+            section_title,
+            heading_level=args.split_level,
+        )
     if section_bounds is not None:
         body_start = int(section_bounds["body_start"])
         section_end = int(section_bounds["section_end"])
         previous_section_storage = previous_storage[body_start:section_end]
-        replaced = _replace_heading_section_body(
-            previous_storage,
-            section_title,
-            current_storage,
-            heading_level=args.split_level,
-        )
+        if anchor_region_requested:
+            replaced = _replace_anchor_region_body(
+                previous_storage,
+                current_storage,
+                args.anchor_start_name,
+                args.anchor_end_name,
+            )
+        else:
+            replaced = _replace_heading_section_body(
+                previous_storage,
+                section_title,
+                current_storage,
+                heading_level=args.split_level,
+            )
         if replaced is not None:
             publish_storage = replaced
+    else:
+        # Some Confluence pages render headings through macros/div wrappers instead
+        # of native h1..h6 tags. Only switch to full-page mode when explicitly allowed.
+        fallback_full_page_mode = bool(args.allow_full_page_fallback)
+        if not full_page_requested:
+            with open(args.md_path, "r", encoding="utf-8") as _md_file:
+                full_markdown_body = _md_file.read()
+            current_markdown = full_markdown_body.strip() + ("\n" if full_markdown_body.strip() else "")
+            current_storage = splitter.markdown_to_html(full_markdown_body)
+        previous_section_storage = previous_storage
+        publish_storage = current_storage
 
     previous_markdown = convert_storage_to_markdown(previous_section_storage)
     reflection_base_html = previous_storage
@@ -2971,6 +3143,7 @@ def main() -> None:
         "local_matches_live_markdown": not bool(markdown_summary["has_changes"]),
         "semantic_markdown_equal": bool(semantic_markdown_equal),
         "section_found_in_page": bool(section_bounds is not None),
+        "fallback_full_page_mode": bool(fallback_full_page_mode),
     }
     baseline_available = bool(
         (isinstance(baseline_storage, str) and baseline_storage.strip())
@@ -3030,6 +3203,7 @@ def main() -> None:
         "page_url": page_url,
         "heading_matched": section_title,
         "heading_found_in_live_storage": bool(section_bounds is not None),
+        "fallback_full_page_mode": bool(fallback_full_page_mode),
         "guard": {
             "status": guard_status,
             "safe_to_publish": safe_to_publish,
@@ -3418,13 +3592,31 @@ def main() -> None:
             _clear_deferred_manual_preview()
             return
 
-        if section_bounds is None:
-            print(
-                "\n⛔ Update blocked: target heading section was not found in live page storage. "
-                "Refusing full-page overwrite for safety."
-            )
+        if section_bounds is None and not fallback_full_page_mode:
+            if anchor_region_requested:
+                print(
+                    "\n⛔ Update blocked: managed anchor region was not found in live page storage. "
+                    "Refusing full-page overwrite for safety. Rerun with --allow-full-page-fallback only if you intend to replace the whole page."
+                )
+            else:
+                print(
+                    "\n⛔ Update blocked: target heading section was not found in live page storage. "
+                    "Refusing full-page overwrite for safety. Rerun with --allow-full-page-fallback only if you intend to replace the whole page."
+                )
             _clear_deferred_manual_preview()
             return
+
+        if fallback_full_page_mode:
+            if full_page_requested:
+                print("\n⚠️ Auto heading resolution detected deleted or renamed headings; using guarded full-page mode.")
+            elif anchor_region_requested:
+                print(
+                    "\n⚠️ Managed anchor region was not found in live storage; using guarded full-page fallback mode."
+                )
+            else:
+                print(
+                    "\n⚠️ Heading section not found in live storage tags; using guarded full-page fallback mode."
+                )
 
         if not decision["final_allowed"]:
             print("\n⛔ Update blocked: direct online edits detected and override not allowed.")
