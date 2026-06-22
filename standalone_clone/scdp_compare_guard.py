@@ -622,8 +622,8 @@ def _normalize_heading_match_key(value: str) -> str:
     # headings wrapped by preserved comments still resolve to the same section.
     cleaned = re.sub(r"</?ac:inline-comment-marker\b[^>]*>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"<[^>]+>", "", cleaned)
-    # Remove zero-width space characters that may be injected as fallback anchors
-    cleaned = cleaned.replace("\u200b", "").replace("&#8203;", "")
+    # Remove fallback anchor whitespace that may be injected around inline comments.
+    cleaned = cleaned.replace("\u200b", "").replace("&#8203;", "").replace("\u00a0", " ")
     cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
     return cleaned
 

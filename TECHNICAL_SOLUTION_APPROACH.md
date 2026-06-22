@@ -152,14 +152,58 @@ When page is updated without preserving these tags, Confluence auto-resolves the
 
 ### Re-injection Logic
 1. Extract all `ac:ref` values and corresponding anchor text from storage before update
-2. After update, search new storage for exact anchor text match
+2. After update, search new storage for the best safe anchor using exact text, edited local context, heading path, inline properties, and historical recovery artifacts
 3. When found, wrap text with `<ac:inline-comment-marker ac:ref="UUID">text</ac:inline-comment-marker>`
-4. Push updated storage back via PUT API
+4. If direct text recovery is not safe, preserve the comment on the nearest surviving heading or as an orphan marker at scope start rather than letting Confluence auto-resolve it
+5. Push updated storage back via PUT API
+
+### Orphan Comment Icon Application
+
+An **orphan comment icon** (displayed as a zero-width marker) is applied when a comment's original anchor text cannot be found after content updates. This occurs in three main scenarios:
+
+#### When Orphan Icon Is Applied
+
+| Scenario | Trigger | Behavior |
+|----------|---------|----------|
+| **Deleted body under surviving heading** | Comment was attached to text that no longer exists, but its parent heading still exists | Icon pinned to nearest surviving heading anchor |
+| **Deleted nested heading** | Comment was attached to a deleted nested heading with surviving ancestor | Icon pinned to the surviving ancestor heading |
+| **Deleted main heading (all paths missing)** | Comment was attached to content/heading that was completely removed from scope | Icon pinned to document/scope start with "deleted-comment" marker |
+
+#### How It Works
+
+When re-injection fails to find the original anchor text:
+
+1. **Search attempt**: System scans for exact anchor text match in updated storage
+2. **Context analysis**: If no exact match, system checks for surviving parent headings or nearby anchors
+3. **Fallback placement**: 
+   - **Success**: Anchor pinned to nearest surviving heading if strong context exists
+   - **Failure**: Orphan marker created with empty anchor (`​` zero-width space)
+4. **Visual indication**: In Confluence UI, orphan comments display at the fallback location with implicit "comment moved due to content deletion" semantics
+
+#### User Visibility
+
+In Confluence, an orphaned comment appears:
+- **Location**: At the top of its containing heading or at document start if no heading context survives
+- **Status**: Remains open/active (not auto-resolved)
+- **Context**: User sees the original comment text but must review content changes to understand why it moved
+- **Action**: Team can decide whether to:
+  - Re-anchor manually to new location
+  - Resolve if content deletion makes comment obsolete
+  - Preserve as historical record
+
+#### Orphan Marker Seeding from Inline Properties
+
+When comment metadata is lost but inline properties still reference the comment:
+- **Trigger**: Missing inline refs from inlineProperties are always seeded as top-of-scope orphan markers
+- **Timing**: During initial before-snapshot if markers were not recovered normally
+- **Effect**: Ensures all active comments are tracked even when storage markers are corrupted or lost
 
 ### Safety Gates
 - Guard script detects drift between published baseline and current online page
 - Requires explicit override flags to bypass safety checks
 - Prevents accidental overwrite of unsynced edits
+- Re-anchor storage save fails closed on HTTP 409 version conflict by default
+- Optional `--allow-reanchor-conflict-retry` allows a strict refresh-and-retry path when operationally acceptable
 
 ---
 

@@ -2,13 +2,147 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from comment_preserve_publish import _enrich_markers_from_history, _inject_inline_markers, _supplement_markers_from_history
+from comment_preserve_publish import _reconcile_existing_markers_from_inline_properties
 from comment_preserve_publish import _record_comment_ref_heading_ownership, _resolve_owned_comment_refs_for_heading
 from comment_preserve_publish import _seed_missing_orphan_markers, _supplement_markers_from_inline_properties
+from comment_preserve_publish import _update_page_with_storage
 
 
 class CommentReanchorTests(unittest.TestCase):
+    def test_inline_property_reconcile_updates_existing_marker_to_unique_current_selection(self):
+        storage_html = (
+            "<h1>ACI Hardening</h1>"
+            "<h2>Overview</h2>"
+            "<p>Overview text.</p>"
+            "<h2>Building Blocks</h2>"
+            "<p>A Tenant in ACI is a container that does not map.</p>"
+        )
+        markers = [
+            {
+                "ref": "ref-bb-body",
+                "anchor_html": "Overview",
+                "left_context": "",
+                "right_context": "",
+                "start": storage_html.index("Overview"),
+                "end": storage_html.index("Overview") + len("Overview"),
+            }
+        ]
+
+        reconciled_markers, reconciled = _reconcile_existing_markers_from_inline_properties(
+            storage_html,
+            (0, len(storage_html)),
+            markers,
+            [{"ref": "ref-bb-body", "anchor_html": "A Tenant in ACI is a container that does not map"}],
+        )
+
+        self.assertEqual(reconciled, 1)
+        self.assertEqual(
+            reconciled_markers[0]["anchor_html"],
+            "A Tenant in ACI is a container that does not map",
+        )
+
+    def test_inline_property_reconcile_skips_ambiguous_selection(self):
+        storage_html = (
+            "<h1>Section 1</h1><p>Shared text.</p>"
+            "<h1>Section 2</h1><p>Shared text.</p>"
+        )
+        markers = [
+            {
+                "ref": "ref-shared",
+                "anchor_html": "Section 1",
+                "left_context": "",
+                "right_context": "",
+                "start": 0,
+                "end": len("Section 1"),
+            }
+        ]
+
+        reconciled_markers, reconciled = _reconcile_existing_markers_from_inline_properties(
+            storage_html,
+            (0, len(storage_html)),
+            markers,
+            [{"ref": "ref-shared", "anchor_html": "Shared text."}],
+        )
+
+        self.assertEqual(reconciled, 0)
+        self.assertEqual(reconciled_markers[0]["anchor_html"], "Section 1")
+
+    def test_inline_property_reconcile_allows_unique_selection_without_owned_ref(self):
+        storage_html = (
+            "<h1>ACI Hardening</h1>"
+            "<h2>Overview</h2>"
+            "<p>Overview text.</p>"
+            "<h2>Building Blocks</h2>"
+            "<p>A Tenant in ACI is a container that does not map.</p>"
+        )
+        markers = [
+            {
+                "ref": "ref-bb-body",
+                "anchor_html": "Overview",
+                "left_context": "",
+                "right_context": "",
+                "start": storage_html.index("Overview"),
+                "end": storage_html.index("Overview") + len("Overview"),
+            }
+        ]
+
+        reconciled_markers, reconciled = _reconcile_existing_markers_from_inline_properties(
+            storage_html,
+            (0, len(storage_html)),
+            markers,
+            [{"ref": "ref-bb-body", "anchor_html": "A Tenant in ACI is a container that does not map"}],
+            owned_refs=set(),
+        )
+
+        self.assertEqual(reconciled, 1)
+        self.assertEqual(
+            reconciled_markers[0]["anchor_html"],
+            "A Tenant in ACI is a container that does not map",
+        )
+
+    def test_inline_property_reconcile_recovers_blank_marker_by_heading_path_branch(self):
+        storage_html = (
+            "<h1>Logical Design Updated</h1>"
+            "<p>This section is divided in two sub-sections:</p>"
+            "<ul>"
+            "<li>Building Blocks: The purpose of this sub-section is to briefly describe each one of the Tenant objects.</li>"
+            "</ul>"
+            "<h1>Other Heading</h1>"
+            "<p>This section is divided in two sub-sections:</p>"
+            "<ul>"
+            "<li>Building Blocks: The purpose of this sub-section is to briefly describe unrelated items.</li>"
+            "</ul>"
+        )
+        markers = [
+            {
+                "ref": "ref-logical-inline-props",
+                "anchor_html": "\u00a0",
+                "left_context": "",
+                "right_context": "",
+                "start": 0,
+                "end": 0,
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            }
+        ]
+
+        reconciled_markers, reconciled = _reconcile_existing_markers_from_inline_properties(
+            storage_html,
+            (0, len(storage_html)),
+            markers,
+            [{"ref": "ref-logical-inline-props", "anchor_html": "sub-section is to briefly describe"}],
+        )
+
+        self.assertEqual(reconciled, 1)
+        self.assertEqual(
+            reconciled_markers[0]["anchor_html"],
+            "sub-section is to briefly describe",
+        )
+
     def test_inline_property_supplement_keeps_ambiguous_page_anchor_blocked_without_ownership(self):
         storage_html = (
             "<h1>Access Polices</h1>"
@@ -69,7 +203,7 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(supplemented, 1)
         self.assertEqual(len(markers), 2)
         self.assertEqual(markers[1]["ref"], "ref-missing-2")
-        self.assertEqual(markers[1]["anchor_html"], "\u200b")
+        self.assertEqual(markers[1]["anchor_html"], "\u00a0")
         self.assertTrue(markers[1].get("orphan_seeded"))
 
     def test_orphan_seeded_marker_reinjects_with_empty_character(self):
@@ -78,7 +212,7 @@ class CommentReanchorTests(unittest.TestCase):
             [
                 {
                     "ref": "ref-orphan-seeded-1",
-                    "anchor_html": "\u200b",
+                    "anchor_html": "\u00a0",
                     "left_context": "",
                     "right_context": "",
                     "start": 0,
@@ -94,7 +228,7 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(reanchored, 1)
         self.assertEqual(skipped, 0)
         self.assertEqual(deleted_icons, 1)
-        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-orphan-seeded-1">\u200b</ac:inline-comment-marker>'))
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-orphan-seeded-1">\u00a0</ac:inline-comment-marker>'))
         self.assertNotIn('&#128172;', updated)
 
     def test_heading_ownership_baseline_records_and_resolves_refs(self):
@@ -163,6 +297,77 @@ class CommentReanchorTests(unittest.TestCase):
                 ["physical design", "hardware overview"],
             )
             self.assertGreaterEqual(markers[0]["start"], 1000)
+
+    @mock.patch("comment_preserve_publish.requests.get")
+    @mock.patch("comment_preserve_publish.requests.put")
+    def test_update_page_with_storage_fails_closed_on_version_conflict_without_retry(
+        self,
+        mock_put,
+        mock_get,
+    ):
+        mock_put.return_value = mock.Mock(status_code=409, text="conflict")
+        latest_resp = mock.Mock()
+        latest_resp.json.return_value = {"version": {"number": 11}}
+        latest_resp.raise_for_status.return_value = None
+        mock_get.return_value = latest_resp
+
+        result = _update_page_with_storage(
+            "https://example.test/conf",
+            "12345",
+            10,
+            "Demo Page",
+            "<p>updated</p>",
+            auth=None,
+            headers={},
+            allow_conflict_retry=False,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "version-conflict")
+        self.assertEqual(result["http_status"], 409)
+        self.assertEqual(result["requested_version"], 10)
+        self.assertEqual(result["latest_version"], 11)
+        mock_put.assert_called_once()
+        mock_get.assert_called_once()
+
+    @mock.patch("comment_preserve_publish.requests.get")
+    @mock.patch("comment_preserve_publish.requests.put")
+    def test_update_page_with_storage_retries_after_conflict_when_allowed(
+        self,
+        mock_put,
+        mock_get,
+    ):
+        conflict_resp = mock.Mock(status_code=409, text="conflict")
+        success_resp = mock.Mock(status_code=200, text="ok")
+        mock_put.side_effect = [conflict_resp, success_resp]
+
+        latest_resp = mock.Mock()
+        latest_resp.json.return_value = {"version": {"number": 11}, "title": "Fresh Title"}
+        latest_resp.raise_for_status.return_value = None
+        mock_get.return_value = latest_resp
+
+        result = _update_page_with_storage(
+            "https://example.test/conf",
+            "12345",
+            10,
+            "Demo Page",
+            "<p>updated</p>",
+            auth=None,
+            headers={},
+            allow_conflict_retry=True,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["http_status"], 200)
+        self.assertEqual(mock_put.call_count, 2)
+        self.assertEqual(mock_get.call_count, 1)
+
+        first_payload = mock_put.call_args_list[0].kwargs["json"]
+        second_payload = mock_put.call_args_list[1].kwargs["json"]
+        self.assertEqual(first_payload["version"]["number"], 10)
+        self.assertEqual(second_payload["version"]["number"], 12)
+        self.assertEqual(second_payload["title"], "Fresh Title")
 
     def test_history_supplement_skips_off_target_heading_candidate(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -248,6 +453,50 @@ class CommentReanchorTests(unittest.TestCase):
                 [item["normalized_text"] for item in enriched[0]["heading_path"]],
                 ["physical design", "hardware overview"],
             )
+
+    def test_history_enrichment_does_not_override_visible_current_anchor_with_stale_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = os.path.join(temp_dir, "467033120_20260529T200519Z_compare_guard.json")
+            payload = {
+                "compare": {
+                    "storage": {
+                        "chunks": [
+                            {
+                                "text": (
+                                    "<h1>Physical Design</h1>"
+                                    "<p><ac:inline-comment-marker ac:ref=\"84caf64e-666b-4828-b775-fe2b8a25292a\">Stale Anchor</ac:inline-comment-marker> text.</p>"
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
+            with open(history_path, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(payload, handle)
+
+            markers = [
+                {
+                    "ref": "84caf64e-666b-4828-b775-fe2b8a25292a",
+                    "anchor_html": "Live Anchor",
+                    "left_context": "",
+                    "right_context": "",
+                    "start": 120,
+                    "end": 131,
+                    "heading_path": [
+                        {"level": 1, "text": "Physical Design", "normalized_text": "physical design"},
+                    ],
+                }
+            ]
+
+            enriched, enriched_count = _enrich_markers_from_history(
+                temp_dir,
+                "467033120",
+                "Physical Design",
+                markers,
+            )
+
+            self.assertEqual(enriched_count, 0)
+            self.assertEqual(enriched[0]["anchor_html"], "Live Anchor")
 
     def test_deleted_content_prefers_deepest_heading_path_when_context_is_too_weak(self):
         new_storage = (
@@ -486,6 +735,44 @@ class CommentReanchorTests(unittest.TestCase):
         )
         self.assertNotIn(
             '<h2><ac:inline-comment-marker ac:ref="ref-h3-deleted-1">Hardware Overview</ac:inline-comment-marker></h2>',
+            updated,
+        )
+
+    def test_deleted_h1_heading_comment_does_not_jump_to_next_h1(self):
+        new_storage = (
+            '<h1>Introduction</h1>'
+            '<p>Intro remains.</p>'
+            '<h1>Naming Conventions</h1>'
+            '<p>Naming section remains.</p>'
+        )
+
+        marker = {
+            'ref': 'ref-h1-deleted-1',
+            'anchor_html': 'Executive Summary',
+            'left_context': '<h1>',
+            'right_context': '</h1><h2>Requirements Mapping</h2>',
+            'start': 120,
+            'end': 137,
+            'heading_path': [
+                {'level': 1, 'text': 'Executive Summary', 'normalized_text': 'executive summary'},
+            ],
+        }
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertTrue(
+            updated.startswith('<ac:inline-comment-marker ac:ref="ref-h1-deleted-1">\u00a0</ac:inline-comment-marker>')
+        )
+        self.assertNotIn(
+            '<h1><ac:inline-comment-marker ac:ref="ref-h1-deleted-1">Naming Conventions</ac:inline-comment-marker></h1>',
             updated,
         )
 
@@ -1109,7 +1396,7 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(deleted_icons, 0)
         self.assertEqual(
             updated,
-            '<h1>Intro</h1><ac:inline-comment-marker ac:ref="ref-main-heading-delete-1">\u200b</ac:inline-comment-marker><h2>Keep</h2><p>Body.</p>',
+            '<h1>Intro</h1><ac:inline-comment-marker ac:ref="ref-main-heading-delete-1">\u00a0</ac:inline-comment-marker><h2>Keep</h2><p>Body.</p>',
         )
 
     def test_deleted_heading_path_pins_comment_to_top_of_scope_with_blank_icon(self):
@@ -1142,11 +1429,11 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(skipped, 0)
         self.assertEqual(deleted_icons, 0)
         self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-heading-top">'))
-        self.assertIn('\u200b', updated)
+        self.assertIn('\u00a0', updated)
 
     def test_deleted_heading_fallback_keeps_blank_target_when_heading_has_no_visible_text(self):
         new_storage = (
-            "<h2>\u200b</h2>"
+            "<h2>\u00a0</h2>"
             "<p>Current content remains.</p>"
         )
         markers = [
@@ -1171,7 +1458,7 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(skipped, 0)
         self.assertEqual(deleted_icons, 0)
         self.assertIn(
-            '<h2><ac:inline-comment-marker ac:ref="ref-deleted-heading-empty-target">\u200b</ac:inline-comment-marker></h2>',
+            '<h2><ac:inline-comment-marker ac:ref="ref-deleted-heading-empty-target">\u00a0</ac:inline-comment-marker></h2>',
             updated,
         )
 
@@ -1212,7 +1499,94 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(reanchored, 1)
         self.assertEqual(skipped, 0)
         self.assertEqual(deleted_icons, 0)
-        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-h1-top">\u200b</ac:inline-comment-marker><h1>ACI Hardening</h1>'))
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-h1-top">\u00a0</ac:inline-comment-marker><h1>ACI Hardening</h1>'))
+
+    def test_deleted_top_level_heading_comment_pins_orphan_to_top_when_context_mismatch(self):
+        old_storage = (
+            "<h1>Logical Design</h1>"
+            "<p>Deleted branch context.</p>"
+            "<h1>ACI Hardening</h1>"
+            "<p>Surviving content.</p>"
+        )
+        new_storage = (
+            "<h1>ACI Hardening</h1>"
+            "<p>Completely different context.</p>"
+        )
+
+        heading_anchor = "Logical Design"
+        heading_start = old_storage.index(heading_anchor)
+        markers = [
+            {
+                "ref": "ref-deleted-h1-heading-top",
+                "anchor_html": heading_anchor,
+                "left_context": old_storage[max(0, heading_start - 80):heading_start],
+                "right_context": old_storage[heading_start + len(heading_anchor):heading_start + len(heading_anchor) + 80],
+                "start": heading_start,
+                "end": heading_start + len(heading_anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            }
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-h1-heading-top">\u00a0</ac:inline-comment-marker><h1>ACI Hardening</h1>'))
+
+    def test_deleted_h1_body_comment_does_not_jump_to_next_h1_when_gap_filled(self):
+        old_storage = (
+            "<h1>Removed Heading</h1>"
+            "<p>Shared body sentence.</p>"
+            "<h1>Surviving Heading</h1>"
+            "<p>Stable trailing paragraph.</p>"
+        )
+        new_storage = (
+            "<h1>Surviving Heading</h1>"
+            "<p>Shared body sentence.</p>"
+            "<p>Stable trailing paragraph.</p>"
+        )
+
+        anchor = "Shared body sentence."
+        anchor_start = old_storage.index(anchor)
+        markers = [
+            {
+                "ref": "ref-deleted-h1-body-gap-fill",
+                "anchor_html": anchor,
+                "left_context": old_storage[max(0, anchor_start - 80):anchor_start],
+                "right_context": old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+                "start": anchor_start,
+                "end": anchor_start + len(anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Removed Heading", "normalized_text": "removed heading"},
+                ],
+            },
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertTrue(
+            updated.startswith('<ac:inline-comment-marker ac:ref="ref-deleted-h1-body-gap-fill">\u00a0</ac:inline-comment-marker><h1>Surviving Heading</h1>')
+        )
+        self.assertNotIn(
+            '<h1>Surviving Heading</h1><p><ac:inline-comment-marker ac:ref="ref-deleted-h1-body-gap-fill">Shared body sentence.</ac:inline-comment-marker></p>',
+            updated,
+        )
 
     def test_h1_heading_rename_preserves_heading_and_internal_comment_context(self):
         old_storage = (
@@ -1270,6 +1644,70 @@ class CommentReanchorTests(unittest.TestCase):
             updated,
         )
 
+    def test_h1_heading_rename_preserves_unique_internal_comment_when_left_context_contains_old_heading(self):
+        old_storage = (
+            "<h1>Logical Design</h1>"
+            "<p>This section is divided in two sub-sections:</p>"
+            "<ul>"
+            "<li>Building Blocks: The purpose of this sub-section is to briefly describe each one of the Tenant objects.</li>"
+            "</ul>"
+        )
+        new_storage = (
+            "<h1>Logical Design Updated</h1>"
+            "<p>This section is divided in two sub-sections:</p>"
+            "<ul>"
+            "<li>Building Blocks: The purpose of this sub-section is to briefly describe each one of the Tenant objects.</li>"
+            "</ul>"
+        )
+
+        heading_anchor = "Logical Design"
+        body_anchor = "sub-section is to briefly describe"
+        heading_start = old_storage.index(heading_anchor)
+        body_start = old_storage.index(body_anchor)
+        markers = [
+            {
+                "ref": "ref-logical-rename-heading",
+                "anchor_html": heading_anchor,
+                "left_context": old_storage[max(0, heading_start - 80):heading_start],
+                "right_context": old_storage[heading_start + len(heading_anchor):heading_start + len(heading_anchor) + 80],
+                "start": heading_start,
+                "end": heading_start + len(heading_anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            },
+            {
+                "ref": "ref-logical-rename-body",
+                "anchor_html": body_anchor,
+                "left_context": old_storage[max(0, body_start - 80):body_start],
+                "right_context": old_storage[body_start + len(body_anchor):body_start + len(body_anchor) + 80],
+                "start": body_start,
+                "end": body_start + len(body_anchor),
+                "heading_path": [
+                    {"level": 1, "text": "Logical Design", "normalized_text": "logical design"},
+                ],
+            },
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            markers,
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 2)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h1><ac:inline-comment-marker ac:ref="ref-logical-rename-heading">Logical Design Updated</ac:inline-comment-marker></h1>',
+            updated,
+        )
+        self.assertIn(
+            '<li>Building Blocks: The purpose of this <ac:inline-comment-marker ac:ref="ref-logical-rename-body">sub-section is to briefly describe</ac:inline-comment-marker> each one of the Tenant objects.</li>',
+            updated,
+        )
+
     def test_h1_renamed_body_comment_becomes_orphan_when_duplicate_text_exists_under_other_h1(self):
         old_storage = (
             "<h1>Logical Design</h1>"
@@ -1311,7 +1749,7 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(skipped, 0)
         self.assertEqual(deleted_icons, 0)
         self.assertTrue(
-            updated.startswith('<ac:inline-comment-marker ac:ref="ref-rename-h1-duplicate-body">\u200b</ac:inline-comment-marker>')
+            updated.startswith('<ac:inline-comment-marker ac:ref="ref-rename-h1-duplicate-body">\u00a0</ac:inline-comment-marker>')
         )
         self.assertNotIn(
             '<h1>Other Heading</h1><p><ac:inline-comment-marker ac:ref="ref-rename-h1-duplicate-body">Shared anchor sentence.</ac:inline-comment-marker></p>',
@@ -1326,7 +1764,7 @@ class CommentReanchorTests(unittest.TestCase):
         markers = [
             {
                 "ref": "ref-orphan-top",
-                "anchor_html": "&#128172;",
+                "anchor_html": "\u00a0",
                 "left_context": "",
                 "right_context": "",
                 "start": 0,
@@ -1344,7 +1782,7 @@ class CommentReanchorTests(unittest.TestCase):
         self.assertEqual(reanchored, 1)
         self.assertEqual(skipped, 0)
         self.assertEqual(deleted_icons, 1)
-        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-orphan-top">\u200b</ac:inline-comment-marker>'))
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-orphan-top">\u00a0</ac:inline-comment-marker>'))
         self.assertIn('<h2>Surviving Section</h2>', updated)
 
 

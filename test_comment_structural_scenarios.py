@@ -94,6 +94,44 @@ class CommentStructuralScenarioTests(unittest.TestCase):
             updated,
         )
 
+    def test_list_item_split_prefers_best_local_fragment(self):
+        old_storage = "<ul><li>Alpha stable target phrase and trailing context.</li></ul>"
+        new_storage = "<ul><li>Alpha stable target phrase.</li><li>Trailing context moved into second bullet.</li></ul>"
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [_marker(old_storage, "target phrase and trailing context.", "ref-list-split")],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<li>Alpha stable <ac:inline-comment-marker ac:ref="ref-list-split">target phrase.</ac:inline-comment-marker></li>',
+            updated,
+        )
+
+    def test_list_item_merge_uses_local_context_not_only_last_token(self):
+        old_storage = "<ul><li>Alpha stable lead.</li><li>Beta target sentence.</li></ul>"
+        new_storage = "<ul><li>Alpha stable lead. Beta target sentence merged.</li></ul>"
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [_marker(old_storage, "Beta target sentence.", "ref-list-merge")],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<li>Alpha stable lead. <ac:inline-comment-marker ac:ref="ref-list-merge">Beta target sentence merged.</ac:inline-comment-marker></li>',
+            updated,
+        )
+
     def test_table_cell_replacement_stays_in_same_cell(self):
         old_storage = (
             "<table><tbody>"
@@ -182,6 +220,31 @@ class CommentStructuralScenarioTests(unittest.TestCase):
             updated,
         )
 
+    def test_table_to_paragraph_transform_preserves_comment_on_rewritten_text_when_row_identity_survives(self):
+        old_storage = (
+            '<h2>Inventory</h2>'
+            '<table><tbody><tr><td>Node A</td><td>Primary fabric role</td></tr></tbody></table>'
+        )
+        new_storage = (
+            '<h2>Inventory</h2>'
+            '<p>Node A now serves as the primary fabric role in this environment.</p>'
+        )
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [_marker(old_storage, 'Primary fabric role', 'ref-table-to-para')],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<p>Node A now serves as the <ac:inline-comment-marker ac:ref="ref-table-to-para">primary fabric role</ac:inline-comment-marker> in this environment.</p>',
+            updated,
+        )
+
     def test_macro_body_rewrite_keeps_comment_inside_same_macro(self):
         old_storage = (
             '<ac:structured-macro ac:name="info">'
@@ -209,6 +272,29 @@ class CommentStructuralScenarioTests(unittest.TestCase):
             updated,
         )
 
+    def test_macro_to_paragraph_relocation_keeps_comment_on_visible_text(self):
+        old_storage = (
+            '<ac:structured-macro ac:name="info">'
+            '<ac:rich-text-body><p>Alpha target phrase stable tail.</p></ac:rich-text-body>'
+            '</ac:structured-macro>'
+        )
+        new_storage = '<p>Alpha target phrase updated stable tail.</p>'
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [_marker(old_storage, 'target phrase', 'ref-macro-to-paragraph')],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<p>Alpha <ac:inline-comment-marker ac:ref="ref-macro-to-paragraph">target phrase</ac:inline-comment-marker> updated stable tail.</p>',
+            updated,
+        )
+
     def test_paragraph_split_prefers_fragment_with_strongest_context(self):
         old_storage = '<p>Alpha stable context target phrase and trailing context.</p>'
         new_storage = '<p>Alpha stable context target phrase.</p><p>Trailing context moved away.</p>'
@@ -228,6 +314,42 @@ class CommentStructuralScenarioTests(unittest.TestCase):
             updated,
         )
 
+    def test_paragraph_to_table_transform_preserves_visible_phrase_when_row_identity_is_strong(self):
+        old_storage = '<p>Node A uses target phrase for role assignment.</p>'
+        new_storage = '<table><tbody><tr><td>Node A</td><td>target phrase updated for role assignment</td></tr></tbody></table>'
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [_marker(old_storage, 'target phrase', 'ref-paragraph-to-table')],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<tr><td>Node A</td><td><ac:inline-comment-marker ac:ref="ref-paragraph-to-table">target phrase</ac:inline-comment-marker> updated for role assignment</td></tr>',
+            updated,
+        )
+
+    def test_mixed_inline_format_anchor_spanning_multiple_tags_preserves_full_visible_phrase(self):
+        old_storage = '<p>Alpha target phrase stable tail.</p>'
+        new_storage = '<p>Alpha <strong>target</strong> <a href="https://x">phrase</a> <code>updated</code> stable tail.</p>'
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [_marker(old_storage, 'target phrase', 'ref-mixed-format')],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertNotIn('<strong><ac:inline-comment-marker ac:ref="ref-mixed-format">target</ac:inline-comment-marker></strong>', updated)
+        self.assertIn('ac:ref="ref-mixed-format"', updated)
+
     def test_two_paragraphs_merged_into_one_preserves_comment_on_local_segment(self):
         old_storage = '<p>Alpha stable sentence.</p><p>Beta target sentence.</p>'
         new_storage = '<p>Alpha stable sentence. Beta target sentence merged.</p>'
@@ -244,6 +366,48 @@ class CommentStructuralScenarioTests(unittest.TestCase):
         self.assertEqual(deleted_icons, 0)
         self.assertIn(
             '<p>Alpha stable sentence. <ac:inline-comment-marker ac:ref="ref-merge-paragraph">Beta target sentence merged.</ac:inline-comment-marker></p>',
+            updated,
+        )
+
+    def test_cross_heading_moved_and_rewritten_content_follows_only_when_context_is_strong(self):
+        old_storage = (
+            '<h2>Source</h2>'
+            '<p>Alpha stable lead target phrase and trailing context.</p>'
+            '<h2>Destination</h2>'
+            '<p>Destination overview text.</p>'
+        )
+        new_storage = (
+            '<h2>Source</h2>'
+            '<p>Source placeholder now removed.</p>'
+            '<h2>Destination</h2>'
+            '<p>Alpha stable lead target phrase rewritten with trailing context preserved.</p>'
+        )
+        anchor = 'target phrase and trailing context.'
+        anchor_start = old_storage.index(anchor)
+        marker = {
+            'ref': 'ref-cross-heading-strong',
+            'anchor_html': anchor,
+            'left_context': old_storage[max(0, anchor_start - 80):anchor_start],
+            'right_context': old_storage[anchor_start + len(anchor):anchor_start + len(anchor) + 80],
+            'start': anchor_start,
+            'end': anchor_start + len(anchor),
+            'heading_path': [
+                {'level': 2, 'text': 'Source', 'normalized_text': 'source'},
+            ],
+        }
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 0)
+        self.assertIn(
+            '<h2>Destination</h2><p>Alpha stable lead <ac:inline-comment-marker ac:ref="ref-cross-heading-strong">target phrase rewritten with trailing context preserved.</ac:inline-comment-marker></p>',
             updated,
         )
 

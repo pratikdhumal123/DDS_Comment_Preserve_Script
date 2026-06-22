@@ -23,11 +23,35 @@ This project is strongest when a comment can still be tied back to one or more o
 
 This project is weaker when several of those signals disappear at the same time.
 
+## Production Readiness Matrix
+
+This is the short operational reading of the current project state.
+
+| Readiness bucket | Scenario families | Current position |
+|---|---|---|
+| `Ready with confidence` | Exact text survives, local rewrite in same block, heading rename, nested-heading rename, deleted text with surviving heading, repeated text with strong locality, list edit/reorder/split/merge, table cell edit/row delete/row reorder, paragraph split/merge, simple table-paragraph conversion with strong identity, macro-body rewrite, simple macro-to-paragraph relocation with strong visible text | These flows have direct regression proof and are suitable for production use in the current section-scoped publish model. |
+| `Usable with manual review` | Mixed inline-format anchors, cross-heading move+rewrite, duplicate-heavy large sections, broader table-paragraph conversions, macro relocation with structure changes, multi-heading reorder in one publish, large-page stress cases, version-conflict retry paths | These flows have some proof or partial hardening, but they should still run under report review and risk-gate checks rather than blind trust. |
+| `Not guaranteed automatically` | Evidence-loss cases, arbitrary block restructuring, several headings merged/split at once, weak-identity list/table transforms, deep macro relocation across unrelated containers, full concurrent live-edit choreography during overwrite and reinjection | These flows are not safe to promise as exact-preserve. The system should fail closed, use safe fallback placement, or require manual review. |
+
+### Operational Rule
+
+For production usage today:
+
+1. Treat `Ready with confidence` scenarios as normal supported flows.
+2. Treat `Usable with manual review` scenarios as supported only with audit review.
+3. Treat `Not guaranteed automatically` scenarios as fail-closed boundaries, not bugs.
+
+### Final Production Verdict
+
+Today, this project is a **production candidate** for section-scoped publishing where edits are mostly local rewrites, heading changes, moderate structural transforms, and repeated-text cases inside a stable hierarchy.
+
+Today, this project is **not yet a universal production-ready engine** for arbitrary whole-document restructuring, deep macro relocation, weak-identity transforms, or live concurrent rewrite races.
+
 ## Explicitly Deferred
 
-Full structural hardening across lists, tables, macros, heavy split/merge rewrites, and concurrency remains deferred.
+Arbitrary structural transforms, macro relocation across unrelated containers, and full end-to-end concurrency orchestration remain deferred.
 
-Heading deletion is no longer excluded from the current project state. There is direct regression coverage for deleted-heading fallback, but the broader structural rewrite families still need separate hardening.
+Heading deletion is no longer excluded from the current project state. There is direct regression coverage for deleted-heading fallback, and targeted structural rewrite families now have explicit regression coverage. The remaining gap is not basic structural support, but broader proof across more ambiguous transforms.
 
 ## Outcome Classes
 
@@ -65,31 +89,31 @@ Each scenario below is mapped to one of these expected outcomes:
 | S20 | Auto-targeting single changed heading | Covered | Exact preserve | `test_compare_guard_heading_resolution.py` | Single changed heading detection works. |
 | S21 | Auto-targeting multiple changed headings in order | Covered | Exact preserve | `test_compare_guard_heading_resolution.py` | Changed-heading list is returned in markdown order. |
 | S22 | Same logical markdown from copied file path | Covered | Exact preserve | `test_compare_guard_heading_resolution.py` | Baseline reuse protects auto mode. |
-| S23 | Comment anchor spans bold/italic/link/code fragments | Partial | Edited-text preserve | No focused regression yet | One link-safety case exists, but broader inline-format coverage is incomplete. |
-| S24 | Commented paragraph split into multiple new paragraphs | Partial | Edited-text preserve | No focused regression yet | Needs deterministic fragment selection rules. |
-| S25 | Multiple old paragraphs merged into one new paragraph | Partial | Edited-text preserve | No focused regression yet | Needs semantic locality scoring for merged text. |
-| S26 | Commented text moved within same section and rewritten | Partial | Edited-text preserve | Indirectly covered | Strong-context move exists, but not broad move+rewrite coverage. |
-| S27 | Commented text moved to another heading and rewritten | Partial | Edited-text preserve or Audit-only | Indirectly covered | Needs explicit proof for cross-heading moved content. |
+| S23 | Comment anchor spans bold/italic/link/code fragments | Partial | Edited-text preserve | `test_comment_reanchor.py`, `test_comment_structural_scenarios.py` | Link-boundary safety exists and multi-tag visible-phrase recovery is now covered, but broader formatting families are still incomplete. |
+| S24 | Commented paragraph split into multiple new paragraphs | Covered | Edited-text preserve | `test_comment_structural_scenarios.py` | Split-paragraph fragment selection now has direct regression coverage. |
+| S25 | Multiple old paragraphs merged into one new paragraph | Covered | Edited-text preserve | `test_comment_structural_scenarios.py` | Merge-to-single-paragraph local anchoring is directly tested. |
+| S26 | Commented text moved within same section and rewritten | Covered | Edited-text preserve | `test_comment_reanchor.py` | Strong-context move handling exists with explicit regression proof. |
+| S27 | Commented text moved to another heading and rewritten | Covered | Edited-text preserve or Recoverable heading preserve | `test_comment_structural_scenarios.py` | Cross-heading move now follows rewritten content when context is strong; weak evidence still falls back safely. |
 | S28 | Heading renamed but body mostly stable | Covered | Exact preserve or Local fallback preserve | `test_comment_reanchor.py`, `test_compare_guard_heading_resolution.py` | Direct heading-anchor and body-anchor regressions now exist. |
 | S29 | Comment attached directly to heading text | Covered | Recoverable heading preserve | `test_comment_reanchor.py` | Heading-text preservation and deleted-heading fallback now have direct regressions. |
-| S30 | Large section contains many duplicate boilerplate phrases | Partial | Local fallback preserve | Some repeated-text coverage exists | Needs scale-oriented stress coverage. |
+| S30 | Large section contains many duplicate boilerplate phrases | Covered | Local fallback preserve | `test_comment_structural_scenarios.py`, `test_comment_scale_scenarios.py` | Duplicate-heavy locality and section stability now have focused regression coverage. |
 | S46 | Deleted nested heading with surviving ancestor | Covered | Recoverable heading preserve | `test_comment_reanchor.py` | Deleted nested heading falls back to a surviving ancestor or safe scope anchor. |
 | S47 | Deleted main heading with surviving upper heading | Covered | Recoverable heading preserve | `test_comment_reanchor.py` | Main deleted heading is preserved as a deleted-comment marker below the surviving upper heading. |
 | S48 | Deleted heading path missing entirely in current scope | Covered | Recoverable heading preserve | `test_comment_reanchor.py` | Comment is pinned to the top of the active scope with a deleted-comment icon. |
-| S31 | Bullet list item edited in place | Missing | Edited-text preserve | No focused regression | List structure should be treated like paragraph-local rewrite. |
-| S32 | Bullet list item reordered within list | Missing | Local fallback preserve or Audit-only | No focused regression | Reorder can break preferred index assumptions. |
-| S33 | Numbered list item split or merged | Missing | Edited-text preserve or Audit-only | No focused regression | Needs block-aware list heuristics. |
-| S34 | Table cell text edited in place | Missing | Edited-text preserve | No focused regression in comment-preserve suite | Table helpers exist elsewhere, but preservation path is not proven. |
-| S35 | Table row deleted | Missing | Recoverable heading preserve or Audit-only | No focused regression | Needs table-aware local fallback. |
-| S36 | Table rows reordered | Missing | Audit-only or strong local fallback | No focused regression | Highly ambiguous without row identity. |
-| S37 | Table converted to paragraph/list or reverse | Missing | Audit-only | No focused regression | Structural transform is currently under-modeled. |
-| S38 | Content inside Confluence macro rewritten | Missing | Audit-only or Edited-text preserve | No focused regression | Macro-heavy storage is a real risk surface. |
-| S39 | Content inside info/expand/panel/tab macro moved | Missing | Audit-only | No focused regression | Needs macro boundary awareness. |
-| S40 | Content reordered across multiple headings in one publish | Missing | Edited-text preserve or Audit-only | No end-to-end regression | Multi-section movement is not deeply proven. |
+| S31 | Bullet list item edited in place | Covered | Edited-text preserve | `test_comment_structural_scenarios.py` | List-item rewrite stays on the rewritten bullet. |
+| S32 | Bullet list item reordered within list | Covered | Local fallback preserve or Edited-text preserve | `test_comment_structural_scenarios.py` | Reordered bullet comments stay with the correct moved item when context is strong. |
+| S33 | Numbered or bullet list item split or merged | Covered | Edited-text preserve or Audit-only | `test_comment_structural_scenarios.py` | List split and merge now have direct synthetic regression coverage in addition to renumber-only handling. |
+| S34 | Table cell text edited in place | Covered | Edited-text preserve | `test_comment_structural_scenarios.py` | Same-cell rewrite behavior is directly tested. |
+| S35 | Table row deleted | Covered | Recoverable heading preserve or Audit-only | `test_comment_structural_scenarios.py` | Deleted-row comments are blocked from jumping to duplicate values in other rows. |
+| S36 | Table rows reordered | Covered | Audit-only or strong local fallback | `test_comment_structural_scenarios.py` | Row-local context can follow reordered rows when evidence is strong. |
+| S37 | Table converted to paragraph/list or reverse | Partial | Edited-text preserve or Audit-only | `test_comment_structural_scenarios.py` | Table-to-paragraph and paragraph-to-table recovery are covered when identity survives strongly; broader transform families remain under-modeled. |
+| S38 | Content inside Confluence macro rewritten | Covered | Audit-only or Edited-text preserve | `test_comment_structural_scenarios.py` | Macro-body rewrite inside structured macro is directly tested. |
+| S39 | Content inside info/expand/panel/tab macro moved | Partial | Audit-only or Edited-text preserve | `test_comment_structural_scenarios.py`, `stress_comment_preservation_harness.py` | Macro-to-paragraph/simple relocation with strong visible text is now covered, but broader moved-macro families are still incomplete. |
+| S40 | Content reordered across multiple headings in one publish | Partial | Edited-text preserve or Audit-only | `test_comment_structural_scenarios.py` | Reordered multi-heading sections with duplicate-heavy content are covered in synthetic form, but broad end-to-end multi-section movement is still not deeply proven. |
 | S41 | Entire section split into several headings | Missing | Recoverable heading preserve or Audit-only | No focused regression | Needs ancestor/descendant redistribution logic. |
 | S42 | Several headings merged into one heading | Missing | Recoverable heading preserve or Audit-only | No focused regression | Needs cluster-level heading-path reasoning. |
-| S43 | Very large document with dozens of comments and repeated patterns | Missing | Mixed outcomes with confidence scoring | No stress suite | Current logic may work, but scale proof is missing. |
-| S44 | Concurrent live page edits during overwrite and reinjection | Missing | Audit-only | No focused regression | This is operationally risky and not solved by anchor logic alone. |
+| S43 | Very large document with dozens of comments and repeated patterns | Partial | Mixed outcomes with confidence scoring | `test_comment_scale_scenarios.py`, `stress_comment_preservation_harness.py` | Scale and duplication proof now exists, but production-scale end-to-end validation is still broader than the current synthetic suite. |
+| S44 | Concurrent live page edits during overwrite and reinjection | Partial | Audit-only | `test_comment_reanchor.py` | Reanchor storage save now has explicit version-conflict coverage and fail-closed retry behavior, but full end-to-end concurrent publish choreography is still operationally risky. |
 | S45 | Marker removed, history unavailable, context destroyed | Missing by design | Audit-only | Stated limitation | This is a true evidence-loss boundary. |
 
 ## Covered Scenario Families
@@ -98,21 +122,32 @@ These families are already in a reasonably good state:
 
 - exact-match reinjection,
 - local rewrite handling,
+- list-local rewrites and reorders,
+- list split and merge handling,
+- table cell, row delete, and row reorder handling,
+- table-to-paragraph recovery when row identity survives,
+- macro-body rewrite handling,
+- simple macro-to-paragraph relocation with strong visible text,
+- paragraph split and merge handling,
+- simple paragraph-to-table and table-to-paragraph identity-preserving transforms,
 - repeated-text locality,
 - local deletion routing,
 - local heading-based fallback,
 - nested heading preference,
+- cross-heading moved-and-rewritten follow with strong context,
 - cross-section drift prevention,
 - history-based recovery when evidence is strong,
+- scale-oriented duplicate locality checks,
 - post-run audit and classification.
 
 ## Partial Scenario Families
 
 These areas have some supporting logic but not enough direct proof yet:
 
-- moved content combined with rewriting,
 - inline formatting boundary cases,
-- large duplicate-heavy sections.
+- macro relocation across containers,
+- full end-to-end large-page production validation,
+- concurrent live edit choreography across the full overwrite plus reinjection flow.
 
 These should be treated as candidates for targeted regression design, not as complete guarantees.
 
@@ -120,52 +155,48 @@ These should be treated as candidates for targeted regression design, not as com
 
 These are the main gaps for a truly large-document production workflow:
 
-- list-aware anchoring,
-- table-aware anchoring,
-- macro-aware anchoring,
-- split/merge block reasoning,
 - large multi-section reorder reasoning,
-- scale and stress validation,
-- concurrency-safe final update flow,
+- table-to-non-table structural transform reasoning,
+- macro relocation and deep macro boundary awareness,
+- stronger end-to-end scale validation against real pages,
+- concurrency-safe final update orchestration across the full publish cycle,
 - confidence-based refusal for ambiguous cases.
 
 ## Recommended Next Work Order
 
 ### Priority 1: Structural content cases that are common and recoverable
 
-1. List item edit, reorder, split, and merge scenarios.
-2. Table cell edit and row deletion scenarios.
-3. Inline formatting boundary scenarios across bold, link, code, and mixed tags.
-4. Direct list/table comment cases with repeated local duplicates.
+1. Table transform scenarios beyond the now-covered table-to-paragraph case, especially reverse transforms and weak-identity conversions.
+2. Inline formatting boundary scenarios across bold, link, code, and mixed tags.
+3. Direct list/table comment cases with repeated local duplicates under larger page stress.
+4. Column-identity and cross-row ambiguity transforms.
 
 ### Priority 2: Ambiguous relocation cases
 
-1. Move within same section plus rewrite.
-2. Move across headings plus rewrite.
-3. Paragraph split and paragraph merge cases.
-4. Duplicate-heavy large-section stress cases.
+1. Move across multiple headings in one publish with several comments at once.
+2. Paragraph split into more than two fragments with repeated local text.
+3. Macro relocation across containers plus rewrite.
+4. Duplicate-heavy large-section stress cases at higher comment density.
 
 ### Priority 3: Production hardening
 
 1. Confidence score per re-anchor decision.
 2. Explicit `manual_review_required` classification when ambiguity is too high.
-3. Final PUT precondition checks against page version drift.
+3. End-to-end final PUT precondition checks against page version drift.
 4. Stronger payload-vs-saved validation after reinjection.
 
 ## Test Plan To Add Next
 
 The next regression pack should add synthetic tests for:
 
-- list item replacement,
-- list item reorder,
-- list item delete,
-- table cell replacement,
-- table row deletion,
+- table column reorder with duplicate values,
+- paragraph-to-table and weaker table-to-paragraph transforms,
 - inline-format mixed-tag anchor,
-- paragraph split into two blocks,
-- two paragraphs merged into one block,
-- moved-and-rewritten content across headings,
-- high-duplication stress page with many comments.
+- paragraph split into three blocks,
+- macro relocation across container boundaries,
+- multi-comment cross-heading moved-and-rewritten content,
+- higher-density stress pages with many duplicate anchors,
+- end-to-end conflict telemetry validation around live version drift.
 
 ## Proposed Production Rule
 

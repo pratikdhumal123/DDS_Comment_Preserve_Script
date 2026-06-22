@@ -4,6 +4,7 @@ from comment_preserve_publish import (
     _build_comment_audit_summary,
     _build_comment_delta,
     _build_comment_marker_map,
+    _build_risk_assessment,
     _build_reinjection_payload_audit,
     _build_storage_anchor_audit_from_markers,
     _extract_inline_markers,
@@ -173,6 +174,55 @@ class CommentReportTests(unittest.TestCase):
             '<p>Cisco Application <ac:inline-comment-marker ac:ref="ref-short-label-1">demo01</ac:inline-comment-marker> is stable.</p>',
             updated,
         )
+
+    def test_risk_assessment_flags_manual_review_for_orphans(self):
+        delta = {"active_missing_count": 0}
+        storage_anchor_audit = {
+            "recoverable_marker_count": 3,
+            "details": [
+                {
+                    "visible_after_publish": True,
+                    "after_anchor_text_preview": "",
+                    "classification": "reanchored_with_changed_local_context",
+                },
+                {
+                    "visible_after_publish": True,
+                    "after_anchor_text_preview": "stable anchor",
+                    "classification": "visible_same_anchor_text_but_context_changed",
+                },
+            ],
+        }
+        inline_visibility = {"visible_marker_count": 3, "recoverable_marker_count": 3}
+
+        risk = _build_risk_assessment(
+            delta,
+            storage_anchor_audit,
+            inline_visibility,
+            recommendation_status="ok",
+        )
+
+        self.assertEqual(risk["risk_level"], "high")
+        self.assertTrue(risk["manual_review_required"])
+        self.assertIn("orphaned_markers_present", risk["reasons"])
+
+    def test_risk_assessment_marks_critical_when_active_missing(self):
+        delta = {"active_missing_count": 2}
+        storage_anchor_audit = {
+            "recoverable_marker_count": 2,
+            "details": [],
+        }
+        inline_visibility = {"visible_marker_count": 2, "recoverable_marker_count": 2}
+
+        risk = _build_risk_assessment(
+            delta,
+            storage_anchor_audit,
+            inline_visibility,
+            recommendation_status="review-required",
+        )
+
+        self.assertEqual(risk["risk_level"], "critical")
+        self.assertTrue(risk["manual_review_required"])
+        self.assertIn("active_comments_missing", risk["reasons"])
 
 
 if __name__ == "__main__":

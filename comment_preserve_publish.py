@@ -18,20 +18,21 @@ _INLINE_MARKER_RE = re.compile(
     r'<ac:inline-comment-marker\s+ac:ref=(["\'])([^"\']+)\1>(.*?)</ac:inline-comment-marker>',
     re.DOTALL | re.IGNORECASE,
 )
-_CONTEXT_WINDOW = 80
+_CONTEXT_WINDOW = 150  # Increased from 80 to capture more surrounding text for better matching
 _MIN_CONTEXT_SCORE = 12
 _MIN_CONTEXT_FRAGMENT = 8
 _FALLBACK_SEARCH_WINDOW = 120
 _MAX_FALLBACK_ANCHOR_CHARS = 220
 _MAX_FALLBACK_ANCHOR_NEWLINES = 3
-_DELETED_COMMENT_ICON_HTML = "&#128172;"
-_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML = "\u200b"
+_DELETED_COMMENT_ICON_HTML = "\u200b"
+_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML = "\u00a0"
 _FULL_PAGE_AUTO_SENTINEL = "__AUTO_FULL_PAGE__"
 _ANCHOR_REGION_AUTO_SENTINEL = "__AUTO_ANCHOR_REGION__"
 _PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS = 300
 _HEADING_PATH_SEPARATOR = " > "
 _DEFAULT_MANAGED_ANCHOR_START = "docautomation_start"
 _DEFAULT_MANAGED_ANCHOR_END = "docautomation_end"
+_INLINE_PROPERTIES_PAGE_SIZE = 500
 
 
 def _bundled_clone_root() -> str:
@@ -149,39 +150,61 @@ def _fetch_inline_properties_with_fallback_auth(
     for auth, headers, _ in _auth_strategies(args, config_module):
         try:
             url = f"{args.base_url.rstrip('/')}/rest/api/content/{args.page_id}/child/comment"
-            resp = requests.get(
-                url,
-                params={"expand": "extensions.inlineProperties", "limit": 500, "depth": "root"},
-                auth=auth,
-                headers=headers,
-                timeout=60,
-            )
-            resp.raise_for_status()
-            results = (resp.json().get("results") or [])
-
             output: List[Dict[str, str]] = []
-            for item in results:
-                comment_id = str(item.get("id") or "").strip()
-                if not comment_id or (open_comment_ids and comment_id not in open_comment_ids):
-                    continue
+            seen_comment_ids: set = set()
+            start = 0
 
-                status = str(item.get("status") or "").lower()
-                if status and status != "current":
-                    continue
-
-                inline_props = ((item.get("extensions") or {}).get("inlineProperties") or {})
-                marker_ref = str(inline_props.get("markerRef") or "").strip()
-                original_selection = str(inline_props.get("originalSelection") or "").strip()
-                if not marker_ref or not original_selection:
-                    continue
-
-                output.append(
-                    {
-                        "comment_id": comment_id,
-                        "ref": marker_ref,
-                        "anchor_html": original_selection,
-                    }
+            while True:
+                resp = requests.get(
+                    url,
+                    params={
+                        "expand": "extensions.inlineProperties",
+                        "limit": _INLINE_PROPERTIES_PAGE_SIZE,
+                        "depth": "root",
+                        "start": start,
+                    },
+                    auth=auth,
+                    headers=headers,
+                    timeout=60,
                 )
+                resp.raise_for_status()
+                payload = resp.json() or {}
+                results = payload.get("results") or []
+                if not results:
+                    break
+
+                for item in results:
+                    comment_id = str(item.get("id") or "").strip()
+                    if (
+                        not comment_id
+                        or comment_id in seen_comment_ids
+                        or (open_comment_ids and comment_id not in open_comment_ids)
+                    ):
+                        continue
+
+                    status = str(item.get("status") or "").lower()
+                    if status and status != "current":
+                        continue
+
+                    inline_props = ((item.get("extensions") or {}).get("inlineProperties") or {})
+                    marker_ref = str(inline_props.get("markerRef") or "").strip()
+                    original_selection = str(inline_props.get("originalSelection") or "").strip()
+                    if not marker_ref or not original_selection:
+                        continue
+
+                    output.append(
+                        {
+                            "comment_id": comment_id,
+                            "ref": marker_ref,
+                            "anchor_html": original_selection,
+                        }
+                    )
+                    seen_comment_ids.add(comment_id)
+
+                if len(results) < _INLINE_PROPERTIES_PAGE_SIZE:
+                    break
+                start += len(results)
+
             return output
         except Exception as exc:
             last_error = exc
@@ -285,6 +308,94 @@ def _supplement_markers_from_inline_properties(
     return markers, supplemented
 
 
+def _reconcile_existing_markers_from_inline_properties(
+    storage_html: str,
+    section_span: Tuple[int, int],
+    existing_markers: List[Dict[str, Any]],
+    inline_props: List[Dict[str, str]],
+    owned_refs: Optional[set] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    scope_start, scope_end = section_span
+    scope_start = max(0, min(scope_start, len(storage_html)))
+    scope_end = max(scope_start, min(scope_end, len(storage_html)))
+    search_space = storage_html[scope_start:scope_end]
+    if not search_space or not existing_markers:
+        return list(existing_markers), 0
+
+    props_by_ref = {
+        str(item.get("ref") or ""): str(item.get("anchor_html") or "")
+        for item in inline_props
+        if str(item.get("ref") or "") and str(item.get("anchor_html") or "")
+    }
+    if not props_by_ref:
+        return list(existing_markers), 0
+
+    reconciled = 0
+    updated_markers: List[Dict[str, Any]] = []
+    for marker in existing_markers:
+        updated = dict(marker)
+        ref = str(updated.get("ref") or "")
+        inline_anchor = props_by_ref.get(ref, "")
+        if not inline_anchor:
+            updated_markers.append(updated)
+            continue
+
+        current_visible = _marker_visible_anchor_text(str(updated.get("anchor_html") or ""))
+        inline_visible = _marker_visible_anchor_text(inline_anchor)
+        if not inline_visible or current_visible == inline_visible:
+            updated_markers.append(updated)
+            continue
+
+        occurrences = _find_all_occurrences(search_space, inline_anchor)
+        page_occurrences = _find_all_occurrences(storage_html, inline_anchor)
+        selected_rel: Optional[int] = None
+        
+        # Always prefer heading_path match when available (for nested heading comments).
+        heading_path = updated.get("heading_path") or []
+        if heading_path and occurrences:
+            branch_span = _pick_heading_span_from_path(search_space, heading_path)
+            if branch_span is not None:
+                branch_start, branch_end = branch_span
+                branch_occurrences = [
+                    rel_index
+                    for rel_index in occurrences
+                    if branch_start <= rel_index < branch_end
+                ]
+            else:
+                branch_occurrences = [
+                    rel_index
+                    for rel_index in occurrences
+                    if _occurrence_matches_heading_path_fuzzy(search_space, rel_index, heading_path)
+                ]
+            if len(branch_occurrences) == 1:
+                selected_rel = branch_occurrences[0]
+        
+        # Fallback: if no heading_path match, use simple occurrence logic.
+        if selected_rel is None:
+            if len(occurrences) == 1:
+                selected_rel = occurrences[0]
+                if owned_refs is not None and ref in owned_refs:
+                    pass
+                elif len(page_occurrences) != 1:
+                    selected_rel = None
+
+        if selected_rel is None:
+            updated_markers.append(updated)
+            continue
+
+        abs_start = scope_start + selected_rel
+        abs_end = abs_start + len(inline_anchor)
+        updated["anchor_html"] = inline_anchor
+        updated["left_context"] = storage_html[max(0, abs_start - _CONTEXT_WINDOW):abs_start]
+        updated["right_context"] = storage_html[abs_end:min(len(storage_html), abs_end + _CONTEXT_WINDOW)]
+        updated["start"] = abs_start
+        updated["end"] = abs_end
+        reconciled += 1
+        updated_markers.append(updated)
+
+    return updated_markers, reconciled
+
+
 def _build_top_orphan_markers_from_inline_properties(inline_props: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     markers: List[Dict[str, Any]] = []
     seen_refs: set = set()
@@ -347,7 +458,7 @@ def _iter_json_string_values(value: Any) -> List[str]:
 
 def _marker_visible_anchor_text(anchor_html: str) -> str:
     plain = _html_to_plain_text(anchor_html or "").replace("\u200b", "").strip()
-    if plain == html.unescape(_DELETED_COMMENT_ICON_HTML):
+    if plain in {html.unescape(_DELETED_COMMENT_ICON_HTML), "💬"}:
         return ""
     return plain
 
@@ -432,6 +543,7 @@ def _enrich_markers_from_history(
     for marker in markers:
         ref = str(marker.get("ref") or "")
         updated = dict(marker)
+        current_visible_text = _marker_visible_anchor_text(str(updated.get("anchor_html") or ""))
         current_heading_path = updated.get("heading_path") or []
         current_in_target_heading = any(
             str(item.get("normalized_text") or "") == target_heading for item in current_heading_path
@@ -443,13 +555,20 @@ def _enrich_markers_from_history(
             continue
 
         best_candidate, best_in_target_heading = _select_best_history_candidate(candidates, target_heading)
+        candidate_visible_text = _marker_visible_anchor_text(str(best_candidate.get("anchor_html") or ""))
         current_quality = _marker_anchor_quality(updated)
         candidate_quality = _marker_anchor_quality(best_candidate)
 
         should_apply = False
-        if best_in_target_heading and not current_in_target_heading:
+        if (
+            current_visible_text
+            and candidate_visible_text
+            and current_visible_text != candidate_visible_text
+        ):
+            should_apply = False
+        elif best_in_target_heading and not current_in_target_heading and not current_visible_text:
             should_apply = True
-        elif candidate_quality > current_quality:
+        elif candidate_quality > current_quality and not current_visible_text:
             should_apply = True
         elif best_in_target_heading and candidate_quality == current_quality:
             should_apply = True
@@ -1434,6 +1553,11 @@ def _select_auto_publish_target(
     allow_full_page_fallback: bool,
     anchor_region_available: bool,
 ) -> str:
+    concrete_titles = [title for title in changed_titles if str(title or "").strip() and title != _FULL_PAGE_AUTO_SENTINEL]
+    if len(concrete_titles) == 1:
+        # Keep section-local publish when a single changed heading is known,
+        # even if managed anchor boundaries are present on the page.
+        return concrete_titles[0]
     if anchor_region_available:
         return _ANCHOR_REGION_AUTO_SENTINEL
     return _select_auto_heading_target(changed_titles, allow_full_page_fallback)
@@ -1498,6 +1622,8 @@ def _build_self_command_for_heading(args: argparse.Namespace, heading_title: str
         ("--yes-override", args.yes_override),
         ("--no-prompt-override", args.no_prompt_override),
         ("--require-visible-inline-markers", args.require_visible_inline_markers),
+        ("--allow-reanchor-conflict-retry", args.allow_reanchor_conflict_retry),
+        ("--require-low-risk-reanchor", args.require_low_risk_reanchor),
         ("--reflect-on-page", args.reflect_on_page),
         ("--reflect-keep-after-refresh", args.reflect_keep_after_refresh),
         ("--reflect-persist-manual", args.reflect_persist_manual),
@@ -1675,6 +1801,127 @@ def _find_all_occurrences(text: str, needle: str) -> List[int]:
     return positions
 
 
+def _find_visible_phrase_spans(text: str, phrase: str) -> List[Tuple[int, int]]:
+    if not text or not phrase:
+        return []
+
+    normalized_phrase = " ".join(str(phrase or "").split()).strip().lower()
+    if not normalized_phrase:
+        return []
+
+    projected_chars: List[str] = []
+    projected_raw_indices: List[int] = []
+    in_tag = False
+    previous_was_space = True
+
+    for raw_index, ch in enumerate(text):
+        if in_tag:
+            if ch == ">":
+                in_tag = False
+            continue
+        if ch == "<":
+            in_tag = True
+            continue
+
+        if ch.isspace():
+            if not previous_was_space:
+                projected_chars.append(" ")
+                projected_raw_indices.append(raw_index)
+                previous_was_space = True
+            continue
+
+        projected_chars.append(ch)
+        projected_raw_indices.append(raw_index)
+        previous_was_space = False
+
+    projected_text = "".join(projected_chars)
+    projected_lower = projected_text.lower()
+    positions: List[Tuple[int, int]] = []
+    cursor = projected_lower.find(normalized_phrase)
+    while cursor != -1:
+        end_cursor = cursor + len(normalized_phrase) - 1
+        if 0 <= cursor < len(projected_raw_indices) and 0 <= end_cursor < len(projected_raw_indices):
+            raw_start = projected_raw_indices[cursor]
+            raw_end = projected_raw_indices[end_cursor] + 1
+            positions.append((raw_start, raw_end))
+        cursor = projected_lower.find(normalized_phrase, cursor + 1)
+    return positions
+
+
+def _pick_visible_phrase_span(
+    text: str,
+    phrase: str,
+    preferred_index: Optional[int] = None,
+) -> Optional[Tuple[int, int]]:
+    spans = _find_visible_phrase_spans(text, phrase)
+    if not spans:
+        return None
+    if preferred_index is None or len(spans) == 1:
+        return spans[0]
+    return min(spans, key=lambda span: abs(span[0] - preferred_index))
+
+
+_INLINE_WRAPPABLE_TAGS = {"a", "b", "code", "em", "i", "span", "strong", "sub", "sup", "u"}
+
+
+def _expand_span_to_enclosing_inline_tags(text: str, start: int, end: int) -> Tuple[int, int]:
+    expanded_start = start
+    expanded_end = end
+
+    while expanded_start > 0:
+        left_text = text[:expanded_start]
+        open_match = re.search(r'<([a-zA-Z][\w:-]*)\b[^>]*>\s*$', left_text)
+        if not open_match:
+            break
+        tag_name = open_match.group(1).lower()
+        if tag_name not in _INLINE_WRAPPABLE_TAGS:
+            break
+        expanded_start = open_match.start()
+
+    while expanded_end < len(text):
+        close_match = re.match(r'\s*</([a-zA-Z][\w:-]*)\s*>', text[expanded_end:])
+        if not close_match:
+            break
+        tag_name = close_match.group(1).lower()
+        if tag_name not in _INLINE_WRAPPABLE_TAGS:
+            break
+        expanded_end += close_match.end()
+
+    return expanded_start, expanded_end
+
+
+def _score_visible_span_context(
+    text: str,
+    start: int,
+    end: int,
+    left_context: str,
+    right_context: str,
+) -> int:
+    plain_left = _html_to_plain_text(left_context or "")
+    plain_right = _html_to_plain_text(right_context or "")
+    plain_before = _html_to_plain_text(text[:start])
+    plain_after = _html_to_plain_text(text[end:])
+    return _common_suffix_len(plain_left, plain_before) + _common_prefix_len(plain_right, plain_after)
+
+
+def _has_meaningful_plain_context_overlap(context: str, surrounding: str, from_left: bool) -> bool:
+    plain_context = _html_to_plain_text(context or "").strip().lower()
+    plain_surrounding = _html_to_plain_text(surrounding or "").strip().lower()
+    if not plain_context or not plain_surrounding:
+        return False
+
+    words = [word for word in re.split(r"\s+", plain_context) if word]
+    if len(words) >= 2:
+        phrase = " ".join(words[-2:] if from_left else words[:2])
+        if phrase and phrase in plain_surrounding:
+            return True
+    if words:
+        token = words[-1] if from_left else words[0]
+        if len(token) >= 4 and token in plain_surrounding:
+            return True
+    return False
+
+
 def _strip_inline_marker_tags(text: str) -> str:
     return re.sub(r"</?ac:inline-comment-marker\b[^>]*>", "", str(text or ""), flags=re.IGNORECASE)
 
@@ -1697,6 +1944,108 @@ def _common_prefix_len(left: str, right: str) -> int:
             break
         matched += 1
     return matched
+
+
+def _try_partial_anchor_match(text: str, anchor: str, preferred_index: Optional[int] = None) -> Optional[int]:
+    """Try to find anchor using partial text when full anchor text is lost.
+    Strategy: Try progressively shorter prefixes (first 50%, then 25%, then 10% of anchor).
+    Only returns match if context score would be acceptable.
+    CONSERVATIVE: Don't use if we already have heading path - let existing logic handle it."""
+    if not anchor or len(anchor) < 8:  # Only try for reasonably sized anchors
+        return None
+    
+    # Try progressively smaller prefixes
+    for prefix_ratio in [0.6, 0.4, 0.25]:  # Higher thresholds - be more conservative
+        prefix_len = max(8, int(len(anchor) * prefix_ratio))  # Longer minimum prefix
+        partial = anchor[:prefix_len]
+        
+        # Try exact match first in HTML
+        plain_partial = _html_to_plain_text(partial).strip()
+        if len(plain_partial) < 5:  # Skip very short fragments
+            continue
+        
+        positions = _find_all_occurrences(text, partial)
+        if positions:
+            # If multiple positions, only use if preferred_index is very close to one
+            if len(positions) == 1:
+                return positions[0]
+            elif preferred_index and len(positions) > 1:
+                best = min(positions, key=lambda p: abs(p - preferred_index))
+                if abs(best - preferred_index) < 500:  # Only if close enough
+                    return best
+    
+    return None
+
+
+def _recover_by_heading_context(
+    text: str,
+    heading_path: Optional[List[Dict[str, Any]]],
+    preferred_index: Optional[int],
+    section_start: int,
+) -> Optional[int]:
+    """Try to recover comment position by heading hierarchy when anchor text is lost.
+    Uses the heading path to find the correct section, then returns position at section start."""
+    if not heading_path or len(heading_path) == 0:
+        return None
+    
+    # Use the deepest heading in path to locate the section
+    target_heading = heading_path[-1]
+    heading_text = target_heading.get('text', '').strip()
+    
+    if not heading_text or len(heading_text) < 2:
+        return None
+    
+    # Search for matching heading in text
+    heading_pattern = re.escape(heading_text[:20])  # Use first 20 chars to find heading
+    matches = re.finditer(heading_pattern, text, re.IGNORECASE)
+    
+    for match in matches:
+        # Found a heading match - position comment after it
+        pos = match.end()
+        # Move forward to end of heading tag
+        close_tag_match = re.search(r'</h[1-6]>', text[pos:], re.IGNORECASE)
+        if close_tag_match:
+            return pos + close_tag_match.end()
+        return pos
+    
+    return None
+
+
+def _lock_position_by_section_offset(
+    text: str,
+    original_offset: int,
+    section_start: int,
+    preferred_index: Optional[int],
+    anchor_text_found: bool,
+) -> Optional[int]:
+    """Pin comment to section + relative offset when anchor text cannot be matched exactly.
+    If anchor was found but context weak, use offset-based positioning as fallback."""
+    if preferred_index is None or not anchor_text_found:
+        return None
+    
+    # Calculate relative offset within section
+    relative_offset = preferred_index - section_start
+    if relative_offset < 0:
+        return None
+    
+    # Try to find position at relative offset in new section
+    search_area = text[section_start:] if section_start < len(text) else ""
+    if len(search_area) > relative_offset:
+        # Find nearest paragraph or content boundary
+        search_start = section_start + min(relative_offset, len(search_area) - 1)
+        
+        # Look for paragraph tag near this position
+        before = text[:search_start]
+        after = text[search_start:]
+        
+        # Try to find opening para/div/li tag after the position
+        para_match = re.search(r'[</>]', after[:200])
+        if para_match:
+            return search_start + para_match.start()
+        
+        return search_start
+    
+    return None
 
 
 def _pick_best_occurrence_by_context(
@@ -1862,6 +2211,63 @@ def _pick_edited_context_span(
 ) -> Optional[Tuple[int, int]]:
     """Pick a safe anchor span using surrounding context when anchor text changed.
     Falls back to finding partial anchor matches if context-based approach fails."""
+    def _recover_from_original_phrase(
+        search_start: int = 0,
+        search_end: Optional[int] = None,
+    ) -> Optional[Tuple[int, int]]:
+        anchor_text = str(original_anchor or "").strip()
+        if not anchor_text:
+            return None
+
+        limit = len(text) if search_end is None else max(search_start, min(search_end, len(text)))
+        haystack = text[search_start:limit]
+        haystack_lower = haystack.lower()
+        if not haystack:
+            return None
+
+        phrases: List[str] = []
+        seen = set()
+
+        def _add_phrase(value: str) -> None:
+            cleaned = str(value or "").strip()
+            key = cleaned.lower()
+            if cleaned and key not in seen:
+                seen.add(key)
+                phrases.append(cleaned)
+
+        _add_phrase(anchor_text)
+        _add_phrase(anchor_text.rstrip('.,;:!?'))
+        words = [token for token in anchor_text.rstrip('.,;:!?').split() if token]
+        for prefix_len in range(min(len(words), 4), 1, -1):
+            _add_phrase(" ".join(words[:prefix_len]))
+
+        for phrase in phrases:
+            phrase_lower = phrase.lower()
+            positions: List[int] = []
+            offset = haystack_lower.find(phrase_lower)
+            while offset != -1:
+                positions.append(search_start + offset)
+                offset = haystack_lower.find(phrase_lower, offset + 1)
+            if not positions:
+                continue
+            if len(positions) > 1:
+                if preferred_index is None:
+                    continue
+                positions.sort(key=lambda pos: abs(pos - preferred_index))
+            phrase_start = positions[0]
+            phrase_end = phrase_start + len(phrase)
+            while phrase_end < limit and text[phrase_end] not in "<>\n":
+                phrase_end += 1
+                if text[phrase_end - 1] in ".!?;":
+                    break
+            normalized = _normalize_fallback_span(text, (phrase_start, phrase_end))
+            if normalized[1] <= normalized[0]:
+                continue
+            candidate_text = text[normalized[0]:normalized[1]].strip()
+            if len(candidate_text) >= max(_MIN_CONTEXT_FRAGMENT, len(anchor_text) // 3):
+                return normalized
+        return None
+
     left_pos, left_len = _find_best_context_fragment_near_preferred(
         text,
         left_context,
@@ -1884,38 +2290,11 @@ def _pick_edited_context_span(
     has_strong = max(left_len, right_len) >= _MIN_CONTEXT_FRAGMENT
     has_weak_both = left_len >= 2 and right_len >= 2
     
-    # If context is too weak, try matching the original anchor before giving up
+    # If context is too weak, try matching the original anchor before giving up.
     if not (has_strong or has_weak_both) and original_anchor:
-        # Try exact match first
-        anchor_pos = text.find(original_anchor)
-        if anchor_pos != -1:
-            return (anchor_pos, anchor_pos + len(original_anchor))
-        # Try without trailing punctuation
-        anchor_clean = original_anchor.rstrip('.,;:!?')
-        if anchor_clean != original_anchor:
-            clean_pos = text.find(anchor_clean)
-            if clean_pos != -1:
-                # Expand to include following text
-                end_pos = clean_pos + len(anchor_clean)
-                while end_pos < len(text) and text[end_pos] not in '<>\n':
-                    end_pos += 1
-                return (clean_pos, end_pos)
-        # Try first N words of anchor
-        words = original_anchor.split()[:3]  # First 3 words
-        if len(words) > 1:
-            partial = ' '.join(words)
-            partial_pos = text.find(partial)
-            if partial_pos != -1:
-                # Expand to include full context around it
-                start_pos = partial_pos
-                end_pos = partial_pos + len(partial)
-                # Expand backwards to word boundary
-                while start_pos > 0 and text[start_pos - 1] not in '<> \n':
-                    start_pos -= 1
-                # Expand forward to include edited part
-                while end_pos < len(text) and text[end_pos] not in '<>\n':
-                    end_pos += 1
-                return (start_pos, end_pos)
+        recovered = _recover_from_original_phrase()
+        if recovered is not None:
+            return recovered
     
     if not (has_strong or has_weak_both):
         if score == 0:
@@ -1929,6 +2308,33 @@ def _pick_edited_context_span(
         end = start
 
     if end <= start:
+        if original_anchor and " " in str(original_anchor or ""):
+            run_start = start
+            while run_start > 0 and text[run_start - 1] not in "<>\n":
+                run_start -= 1
+            run_end = start
+            while run_end < len(text) and text[run_end] not in "<>\n":
+                run_end += 1
+            recovered = _recover_from_original_phrase(run_start, run_end)
+            if recovered is not None:
+                return recovered
+        if (
+            original_anchor
+            and " " in str(original_anchor or "")
+            and start > 0
+            and text[start - 1] not in ">"
+        ):
+            expanded_end = start
+            while expanded_end < len(text) and text[expanded_end] not in "<>\n":
+                expanded_end += 1
+                if text[expanded_end - 1] in ".!?;":
+                    break
+            normalized = _normalize_fallback_span(text, (start, expanded_end))
+            if normalized[1] > normalized[0]:
+                candidate_text = text[normalized[0]:normalized[1]].strip()
+                minimum_len = max(_MIN_CONTEXT_FRAGMENT, len(str(original_anchor).strip()) // 3)
+                if len(candidate_text) >= minimum_len:
+                    return normalized
         token_span = _pick_nearest_text_token_span(text, start)
         return token_span
     
@@ -1947,6 +2353,18 @@ def _pick_edited_context_span(
         normalized = _normalize_fallback_span(text, (start, end))
     if normalized[1] <= normalized[0]:
         return None
+    if original_anchor and " " in str(original_anchor or ""):
+        candidate_text = text[normalized[0]:normalized[1]].strip()
+        if len(candidate_text) < max(_MIN_CONTEXT_FRAGMENT, len(str(original_anchor).strip()) // 2):
+            run_start = normalized[0]
+            while run_start > 0 and text[run_start - 1] not in "<>\n":
+                run_start -= 1
+            run_end = normalized[1]
+            while run_end < len(text) and text[run_end] not in "<>\n":
+                run_end += 1
+            recovered = _recover_from_original_phrase(run_start, run_end)
+            if recovered is not None:
+                return recovered
     return normalized
 
 
@@ -2072,12 +2490,13 @@ def _is_index_inside_tag(text: str, index: int) -> bool:
 def _is_safe_wrap_span(text: str, start: int, end: int) -> bool:
     if end <= start:
         return False
-    if _is_index_inside_tag(text, start) or _is_index_inside_tag(text, max(start, end - 1)):
+    if _is_index_inside_tag(text, start) or _is_index_inside_tag(text, end):
         return False
     candidate = text[start:end]
-    if not _is_safe_anchor_text(candidate):
-        return False
-    return True
+    if "<" in candidate or ">" in candidate:
+        plain_candidate = _html_to_plain_text(candidate).strip()
+        return _is_safe_anchor_text(plain_candidate)
+    return _is_safe_anchor_text(candidate)
 
 
 def _find_deleted_icon_insertion_point(
@@ -2680,6 +3099,43 @@ def _occurrence_matches_heading_path(
     return actual == expected
 
 
+def _occurrence_matches_heading_path_fuzzy(
+    text: str,
+    occurrence_index: int,
+    heading_path: Optional[List[Dict[str, Any]]],
+) -> bool:
+    if not heading_path:
+        return True
+
+    expected = [
+        str(item.get("normalized_text") or "")
+        for item in heading_path
+        if str(item.get("normalized_text") or "")
+    ]
+    if not expected:
+        return True
+
+    actual = [
+        str(item.get("normalized_text") or "")
+        for item in _heading_path_at_index(text, occurrence_index)
+        if str(item.get("normalized_text") or "")
+    ]
+    if not actual or len(actual) != len(expected):
+        return False
+    if len(expected) == 1:
+        return expected[0] == actual[0] or expected[0] in actual[0] or actual[0] in expected[0]
+    if actual[:-1] != expected[:-1]:
+        return False
+
+    expected_leaf = expected[-1]
+    actual_leaf = actual[-1]
+    return (
+        expected_leaf == actual_leaf
+        or expected_leaf in actual_leaf
+        or actual_leaf in expected_leaf
+    )
+
+
 def _normalize_anchor_for_matching(anchor: str) -> Tuple[str, bool]:
     raw_anchor = str(anchor or "")
     if "<ac:inline-comment-marker" in raw_anchor.lower():
@@ -2687,6 +3143,38 @@ def _normalize_anchor_for_matching(anchor: str) -> Tuple[str, bool]:
         if visible_anchor:
             return visible_anchor, True
     return raw_anchor, False
+
+
+def _find_heading_by_text(text: str, heading_text: str, target_level: Optional[int] = None) -> Optional[Tuple[int, int]]:
+    """Find a heading by its text content when heading_path is stale.
+    
+    This helps when large content shifts make original heading paths unreliable.
+    Searches for a heading tag containing the target text.
+    """
+    if not text or not heading_text:
+        return None
+    
+    heading_pattern = re.compile(
+        r'<h([1-6])\b[^>]*>([^<]+)</h\1>', 
+        re.IGNORECASE | re.DOTALL
+    )
+    
+    normalized_target = str(heading_text or "").strip().lower()
+    
+    for match in heading_pattern.finditer(text):
+        level_str = match.group(1)
+        heading_content = match.group(2).strip()
+        normalized_content = heading_content.lower()
+        
+        # If target_level specified, only match that level
+        if target_level is not None and int(level_str) != target_level:
+            continue
+        
+        # Allow partial match (e.g., "APIC Setup" matches "APIC Setup and Configuration")
+        if normalized_target in normalized_content or normalized_content in normalized_target:
+            return (match.start(), match.end())
+    
+    return None
 
 
 def _inject_inline_markers(
@@ -2700,6 +3188,27 @@ def _inject_inline_markers(
     comments from storage HTML, so anything found in old storage is for an active comment.
     Returns (updated_html, reanchored_count, skipped_count, deleted_anchor_icon_count)."""
     result = storage_html
+
+    # Confluence can return already-orphaned copies (empty visible anchor) for active refs.
+    # Remove only those empty-anchor copies first, then let normal reinjection logic run.
+    refs_in_run = {str(m.get("ref") or "") for m in markers if str(m.get("ref") or "")}
+    if refs_in_run:
+        existing = _extract_inline_markers(result)
+        if section_span is not None:
+            sec_start, sec_end = section_span
+            existing = [
+                m for m in existing
+                if int(m.get("start", -1)) >= sec_start and int(m.get("end", -1)) <= sec_end
+            ]
+        orphan_refs_to_strip = {
+            str(m.get("ref") or "")
+            for m in existing
+            if str(m.get("ref") or "") in refs_in_run
+            and not _marker_visible_anchor_text(str(m.get("anchor_html") or ""))
+        }
+        if orphan_refs_to_strip:
+            result, _ = _strip_inline_markers_by_ref(result, orphan_refs_to_strip, section_span=section_span)
+    
     scope_start = 0
     scope_end = len(result)
     if section_span is not None:
@@ -2723,6 +3232,10 @@ def _inject_inline_markers(
         scope_end += delta
         accumulated_injection_delta += delta
         reanchored += 1
+
+    def _commit_top_orphan_marker(ref: str) -> None:
+        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
+        _commit_injection(scope_start, scope_start, wrapped)
 
     def _wrap_deleted_heading(
         ref: str,
@@ -2748,9 +3261,7 @@ def _inject_inline_markers(
         if heading_path:
             candidate_info = _pick_heading_candidate_from_path(search_space, heading_path)
             if candidate_info is None:
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
+                _commit_top_orphan_marker(ref)
                 return True
 
             _best_candidate, best_depth, target_depth, match_kind = candidate_info
@@ -2765,7 +3276,10 @@ def _inject_inline_markers(
                     preferred_index,
                     heading_path=heading_path,
                 )
-                insert_abs = scope_start if insert_rel is None else scope_start + insert_rel
+                if insert_rel is None:
+                    _commit_top_orphan_marker(ref)
+                    return True
+                insert_abs = scope_start + insert_rel
                 wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
                 _commit_injection(insert_abs, insert_abs, wrapped)
                 return True
@@ -2778,15 +3292,29 @@ def _inject_inline_markers(
         )
         if heading_span_rel is None:
             if heading_path:
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
+                _commit_top_orphan_marker(ref)
                 return True
             return False
         span_start_rel, span_end_rel = heading_span_rel
         span_start_abs = scope_start + span_start_rel
         span_end_abs = scope_start + span_end_rel
         fallback_anchor = search_space[span_start_rel:span_end_rel]
+        if (
+            heading_path
+            and len(heading_path) == 1
+            and int(heading_path[-1].get("level") or 0) == 1
+            and not _context_indicates_heading_anchor(left_context, right_context)
+        ):
+            heading_fallback_score = _score_occurrence_context(
+                search_space,
+                fallback_anchor,
+                span_start_rel,
+                left_context,
+                right_context,
+            )
+            if heading_fallback_score < 16:
+                _commit_top_orphan_marker(ref)
+                return True
         wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
         _commit_injection(span_start_abs, span_end_abs, wrapped)
         return True
@@ -2803,17 +3331,49 @@ def _inject_inline_markers(
             preferred_index = max(0, old_start - old_scope_start + accumulated_injection_delta)
         visible_anchor_text = _marker_visible_anchor_text(anchor)
         anchor, anchor_was_nested_marker = _normalize_anchor_for_matching(anchor)
+        search_space = result[scope_start:scope_end]
         if not visible_anchor_text:
-            insert_abs = scope_start
-            fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
-            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-            _commit_injection(insert_abs, insert_abs, wrapped)
+            # Recover from inlineProperties anchor text when the old marker was already orphaned.
+            inline_anchor = str(m.get("inline_anchor_html") or "")
+            inline_visible = _marker_visible_anchor_text(inline_anchor)
+            if inline_visible and search_space:
+                inline_occurrences = _find_all_occurrences(search_space, inline_anchor)
+                selected_inline_index: Optional[int] = None
+                if len(inline_occurrences) == 1:
+                    selected_inline_index = inline_occurrences[0]
+                elif inline_occurrences:
+                    if heading_path:
+                        branch_occurrences = [
+                            idx for idx in inline_occurrences
+                            if _occurrence_matches_heading_path_fuzzy(search_space, idx, heading_path)
+                        ]
+                        if len(branch_occurrences) == 1:
+                            selected_inline_index = branch_occurrences[0]
+                    if selected_inline_index is None and preferred_index is not None:
+                        selected_inline_index = min(
+                            inline_occurrences,
+                            key=lambda idx: abs(idx - preferred_index),
+                        )
+                if selected_inline_index is not None and _is_safe_wrap_span(
+                    search_space,
+                    selected_inline_index,
+                    selected_inline_index + len(inline_anchor),
+                ):
+                    inline_start_abs = scope_start + selected_inline_index
+                    inline_end_abs = inline_start_abs + len(inline_anchor)
+                    wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{inline_anchor}</ac:inline-comment-marker>'
+                    _commit_injection(inline_start_abs, inline_end_abs, wrapped)
+                    continue
+
+            _commit_top_orphan_marker(ref)
             deleted_anchor_icon_count += 1
             continue
         if not anchor or not anchor.strip():
             skipped += 1
             continue
-        search_space = result[scope_start:scope_end]
+        if not search_space:
+            skipped += 1
+            continue
         if not search_space:
             skipped += 1
             continue
@@ -2830,80 +3390,104 @@ def _inject_inline_markers(
         if heading_path_missing:
             if len(heading_path) == 1:
                 target_level = int(heading_path[-1].get("level") or 0)
-                if target_level == 1 and _context_indicates_heading_anchor(left_context, right_context):
+                heading_anchor_context = _context_indicates_heading_anchor(left_context, right_context)
+                if heading_anchor_context:
                     renamed_heading_span_rel = _pick_heading_span_by_level(search_space, target_level, preferred_index)
                     if renamed_heading_span_rel is not None:
                         span_start_rel, span_end_rel = renamed_heading_span_rel
                         span_start_abs = scope_start + span_start_rel
                         span_end_abs = scope_start + span_end_rel
                         fallback_anchor = search_space[span_start_rel:span_end_rel]
-                        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-                        _commit_injection(span_start_abs, span_end_abs, wrapped)
-                        continue
-                if target_level == 1 and not _context_indicates_heading_anchor(left_context, right_context):
-                    branch_matches: List[Tuple[int, int, int, int, str]] = []
-                    for branch_start_rel, branch_end_rel in _iter_heading_branch_spans_by_level(search_space, target_level):
-                        branch_search_space = search_space[branch_start_rel:branch_end_rel]
-                        if not branch_search_space:
-                            continue
-
-                        branch_preferred_index = preferred_index
-                        if branch_preferred_index is not None:
-                            branch_preferred_index = max(0, min(branch_preferred_index - branch_start_rel, len(branch_search_space) - 1))
-
-                        branch_anchor = anchor
-                        branch_occurrences = _find_all_occurrences(branch_search_space, branch_anchor)
-                        if not branch_occurrences:
-                            stripped_anchor = anchor.strip()
-                            if stripped_anchor and stripped_anchor != anchor:
-                                stripped_occurrences = _find_all_occurrences(branch_search_space, stripped_anchor)
-                                if stripped_occurrences:
-                                    branch_occurrences = stripped_occurrences
-                                    branch_anchor = stripped_anchor
-
-                        if branch_occurrences:
-                            branch_selected_index = _pick_best_occurrence_by_context(
-                                text=branch_search_space,
-                                anchor=branch_anchor,
-                                occurrences=branch_occurrences,
-                                left_context=left_context,
-                                right_context=right_context,
-                                preferred_index=branch_preferred_index,
-                            )
-                            if branch_selected_index is not None and _is_safe_wrap_span(
-                                branch_search_space,
-                                branch_selected_index,
-                                branch_selected_index + len(branch_anchor),
-                            ):
-                                branch_score = _score_occurrence_context(
-                                    branch_search_space,
-                                    branch_anchor,
-                                    branch_selected_index,
-                                    left_context,
-                                    right_context,
-                                )
-                                branch_matches.append((2, branch_score, branch_start_rel, branch_selected_index, branch_anchor))
-                                continue
-
-                        branch_edited_span = _pick_edited_context_span(
-                            branch_search_space,
+                        heading_right_context_score = _common_prefix_len(
+                            right_context,
+                            search_space[span_end_rel:],
+                        )
+                        heading_context_score = _score_occurrence_context(
+                            search_space,
+                            fallback_anchor,
+                            span_start_rel,
                             left_context,
                             right_context,
-                            preferred_index=branch_preferred_index,
-                            original_anchor=anchor,
                         )
-                        if branch_edited_span is not None:
-                            branch_span_start_rel, branch_span_end_rel = branch_edited_span
-                            if _is_safe_wrap_span(branch_search_space, branch_span_start_rel, branch_span_end_rel):
-                                edited_anchor = branch_search_space[branch_span_start_rel:branch_span_end_rel]
-                                branch_score = _score_occurrence_context(
-                                    branch_search_space,
-                                    edited_anchor,
-                                    branch_span_start_rel,
-                                    left_context,
-                                    right_context,
+                        # Fail closed unless heading-side context has a meaningful match.
+                        # Low scores tend to come only from generic tag boundaries and can
+                        # incorrectly preserve deleted-heading comments on unrelated headings.
+                        if (
+                            heading_context_score >= 16
+                            and heading_right_context_score >= _MIN_CONTEXT_FRAGMENT
+                        ):
+                            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
+                            _commit_injection(span_start_abs, span_end_abs, wrapped)
+                            continue
+                if not heading_anchor_context:
+                    has_next_same_level_heading_in_old_context = bool(
+                        re.search(rf"<h{target_level}\\b", str(right_context or ""), re.IGNORECASE)
+                    )
+                    branch_matches: List[Tuple[int, int, int, int, str]] = []
+                    if not has_next_same_level_heading_in_old_context:
+                        for branch_start_rel, branch_end_rel in _iter_heading_branch_spans_by_level(search_space, target_level):
+                            branch_search_space = search_space[branch_start_rel:branch_end_rel]
+                            if not branch_search_space:
+                                continue
+
+                            branch_preferred_index = preferred_index
+                            if branch_preferred_index is not None:
+                                branch_preferred_index = max(0, min(branch_preferred_index - branch_start_rel, len(branch_search_space) - 1))
+
+                            branch_anchor = anchor
+                            branch_occurrences = _find_all_occurrences(branch_search_space, branch_anchor)
+                            if not branch_occurrences:
+                                stripped_anchor = anchor.strip()
+                                if stripped_anchor and stripped_anchor != anchor:
+                                    stripped_occurrences = _find_all_occurrences(branch_search_space, stripped_anchor)
+                                    if stripped_occurrences:
+                                        branch_occurrences = stripped_occurrences
+                                        branch_anchor = stripped_anchor
+
+                            if branch_occurrences:
+                                branch_selected_index = _pick_best_occurrence_by_context(
+                                    text=branch_search_space,
+                                    anchor=branch_anchor,
+                                    occurrences=branch_occurrences,
+                                    left_context=left_context,
+                                    right_context=right_context,
+                                    preferred_index=branch_preferred_index,
                                 )
-                                branch_matches.append((1, branch_score, branch_start_rel, branch_span_start_rel, edited_anchor))
+                                if branch_selected_index is not None and _is_safe_wrap_span(
+                                    branch_search_space,
+                                    branch_selected_index,
+                                    branch_selected_index + len(branch_anchor),
+                                ):
+                                    branch_score = _score_occurrence_context(
+                                        branch_search_space,
+                                        branch_anchor,
+                                        branch_selected_index,
+                                        left_context,
+                                        right_context,
+                                    )
+                                    branch_matches.append((2, branch_score, branch_start_rel, branch_selected_index, branch_anchor))
+                                    continue
+
+                            branch_edited_span = _pick_edited_context_span(
+                                branch_search_space,
+                                left_context,
+                                right_context,
+                                preferred_index=branch_preferred_index,
+                                original_anchor=anchor,
+                            )
+                            if branch_edited_span is not None:
+                                branch_span_start_rel, branch_span_end_rel = branch_edited_span
+                                if _is_safe_wrap_span(branch_search_space, branch_span_start_rel, branch_span_end_rel):
+                                    edited_anchor = branch_search_space[branch_span_start_rel:branch_span_end_rel]
+                                    branch_score = _score_occurrence_context(
+                                        branch_search_space,
+                                        edited_anchor,
+                                        branch_span_start_rel,
+                                        left_context,
+                                        right_context,
+                                    )
+                                    if branch_score >= 16:
+                                        branch_matches.append((1, branch_score, branch_start_rel, branch_span_start_rel, edited_anchor))
 
                     if len(branch_matches) == 1:
                         _match_kind, _match_score, branch_start_rel, branch_offset_rel, matched_anchor = branch_matches[0]
@@ -2912,18 +3496,54 @@ def _inject_inline_markers(
                         _commit_injection(branch_selected_abs, branch_selected_abs + len(matched_anchor), wrapped)
                         continue
 
-                    insert_abs = scope_start
-                    wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                    _commit_injection(insert_abs, insert_abs, wrapped)
+                    # Before falling back to orphan, try to find the heading by its text
+                    # This helps when heading_path is stale due to large content shifts
+                    if heading_path and len(heading_path) > 0:
+                        heading_text = heading_path[-1].get("text", "")
+                        if heading_text:
+                            found_heading = _find_heading_by_text(search_space, heading_text, target_level)
+                            if found_heading is not None:
+                                heading_start, heading_end = found_heading
+                                heading_content = search_space[heading_start:heading_end]
+                                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{heading_content}</ac:inline-comment-marker>'
+                                _commit_injection(scope_start + heading_start, scope_start + heading_end, wrapped)
+                                continue
+
+                    _commit_top_orphan_marker(ref)
                     continue
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
+                # Single-level heading but no matches found - try to find by heading text
+                if heading_path and len(heading_path) > 0:
+                    heading_text = heading_path[-1].get("text", "")
+                    if heading_text:
+                        found_heading = _find_heading_by_text(search_space, heading_text, target_level)
+                        if found_heading is not None:
+                            heading_start, heading_end = found_heading
+                            heading_content = search_space[heading_start:heading_end]
+                            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{heading_content}</ac:inline-comment-marker>'
+                            _commit_injection(scope_start + heading_start, scope_start + heading_end, wrapped)
+                            continue
+
+                _commit_top_orphan_marker(ref)
                 continue
             else:
-                insert_abs = scope_start
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_DELETED_COMMENT_ICON_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
+                # For multi-level heading paths (nested headings), try to preserve
+                # by finding the best matching heading in the path before marking as orphan
+                if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
+                    continue
+                # Before orphaning, try to find the heading by its text
+                if heading_path and len(heading_path) > 0:
+                    heading_text = heading_path[-1].get("text", "")
+                    if heading_text:
+                        target_level = int(heading_path[-1].get("level") or 0)
+                        found_heading = _find_heading_by_text(search_space, heading_text, target_level)
+                        if found_heading is not None:
+                            heading_start, heading_end = found_heading
+                            heading_content = search_space[heading_start:heading_end]
+                            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{heading_content}</ac:inline-comment-marker>'
+                            _commit_injection(scope_start + heading_start, scope_start + heading_end, wrapped)
+                            continue
+                # If still not preserved, mark as orphan
+                _commit_top_orphan_marker(ref)
                 continue
 
         if section_span is not None and preferred_index is not None and anchor_was_nested_marker:
@@ -2955,6 +3575,24 @@ def _inject_inline_markers(
                 if strip_occurrences:
                     occurrences = strip_occurrences
                     anchor_used = stripped
+        
+        # SMART ANCHOR RECOVERY: If exact anchor not found, try partial match
+        # DISABLED: Causing test failures - stick with existing context-based approach
+        # if not occurrences:
+        #     partial_match = _try_partial_anchor_match(search_space, anchor, preferred_index)
+        #     if partial_match is not None:
+        #         occurrences = [partial_match]
+        #         anchor_used = anchor  # Use original for wrapping
+        
+        # Prefer occurrences within heading_path branch for nested comments
+        if occurrences and heading_path:
+            branch_occurrences = [
+                idx for idx in occurrences
+                if _occurrence_matches_heading_path_fuzzy(search_space, idx, heading_path)
+            ]
+            if branch_occurrences:
+                occurrences = branch_occurrences
+        
         selected_index: Optional[int] = None
         if occurrences:
             selected_index = _pick_best_occurrence_by_context(
@@ -2965,6 +3603,39 @@ def _inject_inline_markers(
                 right_context=right_context,
                 preferred_index=preferred_index,
             )
+            if (
+                selected_index is None
+                and len(occurrences) == 1
+                and preferred_index is not None
+                and heading_path
+                and _occurrence_matches_heading_path(search_space, occurrences[0], heading_path)
+            ):
+                unique_index = occurrences[0]
+                unique_context_score = _score_occurrence_context(
+                    search_space,
+                    anchor_used,
+                    unique_index,
+                    left_context,
+                    right_context,
+                )
+                unique_right_score = _common_prefix_len(
+                    right_context,
+                    search_space[unique_index + len(anchor_used):],
+                )
+                if unique_context_score > 0 or unique_right_score >= _MIN_CONTEXT_FRAGMENT:
+                    selected_index = unique_index
+        
+        # HEADING CONTEXT RECOVERY: Try to find by heading path when anchor lost
+        # DISABLED: Was causing issues with existing heading placement logic
+        # if selected_index is None and not occurrences and heading_path:
+        #     heading_recovery_idx = _recover_by_heading_context(
+        #         search_space, heading_path, preferred_index, scope_start
+        #     )
+        #     if heading_recovery_idx is not None:
+        #         selected_index = heading_recovery_idx
+        #         # Use orphan marker at recovered position
+        #         anchor_used = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
+        
         if occurrences and preferred_index is not None:
             left_pos, left_len = _find_best_context_fragment(search_space, left_context, from_left=True)
             search_start = (left_pos + left_len) if left_pos is not None else 0
@@ -2976,6 +3647,36 @@ def _inject_inline_markers(
             # Only try edited-span picker if anchor genuinely doesn't exist (occurrences is empty).
             # If occurrences exist but context rejected them, skip to fallback handling.
             if not occurrences:
+                visible_phrase_span = _pick_visible_phrase_span(
+                    search_space,
+                    anchor_used,
+                    preferred_index=preferred_index,
+                )
+                if visible_phrase_span is not None:
+                    visible_start_rel, visible_end_rel = _expand_span_to_enclosing_inline_tags(
+                        search_space,
+                        visible_phrase_span[0],
+                        visible_phrase_span[1],
+                    )
+                    if _is_safe_wrap_span(search_space, visible_start_rel, visible_end_rel):
+                        visible_context_score = _score_visible_span_context(
+                            search_space,
+                            visible_start_rel,
+                            visible_end_rel,
+                            left_context,
+                            right_context,
+                        )
+                        if (
+                            visible_context_score >= max(4, _MIN_CONTEXT_FRAGMENT // 2)
+                            or _has_meaningful_plain_context_overlap(left_context, search_space[:visible_start_rel], from_left=True)
+                            or _has_meaningful_plain_context_overlap(right_context, search_space[visible_end_rel:], from_left=False)
+                        ):
+                            visible_start_abs = scope_start + visible_start_rel
+                            visible_end_abs = scope_start + visible_end_rel
+                            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{search_space[visible_start_rel:visible_end_rel]}</ac:inline-comment-marker>'
+                            _commit_injection(visible_start_abs, visible_end_abs, wrapped)
+                            continue
+
                 # Try edited-span picker when exact anchor is not found.
                 # This covers: anchor changed (text exists but needs editing) and anchor deleted entirely.
                 edited_span = _pick_edited_context_span(
@@ -3046,6 +3747,36 @@ def _inject_inline_markers(
                 wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{anchor_used}</ac:inline-comment-marker>'
                 _commit_injection(selected_index_abs, selected_index_abs + len(anchor_used), wrapped)
                 continue
+
+        visible_phrase_span = _pick_visible_phrase_span(
+            search_space,
+            anchor_used,
+            preferred_index=preferred_index,
+        )
+        if visible_phrase_span is not None:
+            visible_start_rel, visible_end_rel = _expand_span_to_enclosing_inline_tags(
+                search_space,
+                visible_phrase_span[0],
+                visible_phrase_span[1],
+            )
+            if _is_safe_wrap_span(search_space, visible_start_rel, visible_end_rel):
+                visible_context_score = _score_visible_span_context(
+                    search_space,
+                    visible_start_rel,
+                    visible_end_rel,
+                    left_context,
+                    right_context,
+                )
+                if (
+                    visible_context_score >= max(4, _MIN_CONTEXT_FRAGMENT // 2)
+                    or _has_meaningful_plain_context_overlap(left_context, search_space[:visible_start_rel], from_left=True)
+                    or _has_meaningful_plain_context_overlap(right_context, search_space[visible_end_rel:], from_left=False)
+                ):
+                    visible_start_abs = scope_start + visible_start_rel
+                    visible_end_abs = scope_start + visible_end_rel
+                    wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{search_space[visible_start_rel:visible_end_rel]}</ac:inline-comment-marker>'
+                    _commit_injection(visible_start_abs, visible_end_abs, wrapped)
+                    continue
 
         # If anchor text changed (edited), use surrounding context to find a
         # safe replacement span so the comment stays on the edited text.
@@ -3202,15 +3933,20 @@ def _update_page_with_storage(
     storage_html: str,
     auth: Any,
     headers: Dict[str, str],
-) -> bool:
-    """PUT the page with new storage HTML content, retrying on version conflicts."""
+    allow_conflict_retry: bool = False,
+) -> Dict[str, Any]:
+    """PUT the page with new storage HTML content.
+
+    Returns a structured status and, by default, fails closed on version conflict.
+    """
     url = f"{base_url.rstrip('/')}/rest/api/content/{page_id}"
     put_headers = {k: v for k, v in headers.items()}
     put_headers["Content-Type"] = "application/json"
 
     current_version = int(version)
     current_title = str(title or "")
-    for _attempt in range(3):
+    max_attempts = 3 if allow_conflict_retry else 1
+    for _attempt in range(max_attempts):
         payload = {
             "version": {"number": current_version},
             "title": current_title,
@@ -3225,9 +3961,37 @@ def _update_page_with_storage(
             timeout=_PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS,
         )
         if resp.status_code in (200, 201):
-            return True
+            return {"ok": True, "status": "ok", "http_status": int(resp.status_code)}
         if resp.status_code != 409:
-            return False
+            return {
+                "ok": False,
+                "status": "http-error",
+                "http_status": int(resp.status_code),
+                "response_preview": str(resp.text or "")[:500],
+            }
+
+        if not allow_conflict_retry:
+            latest_version = None
+            try:
+                latest_resp = requests.get(
+                    url,
+                    params={"expand": STORAGE_EXPAND},
+                    auth=auth,
+                    headers=headers,
+                    timeout=60,
+                )
+                latest_resp.raise_for_status()
+                latest_data = latest_resp.json()
+                latest_version = int(((latest_data.get("version") or {}).get("number") or 0))
+            except Exception:
+                latest_version = None
+            return {
+                "ok": False,
+                "status": "version-conflict",
+                "http_status": 409,
+                "requested_version": current_version,
+                "latest_version": latest_version,
+            }
 
         try:
             latest_resp = requests.get(
@@ -3241,10 +4005,19 @@ def _update_page_with_storage(
             latest_data = latest_resp.json()
             current_version = int(((latest_data.get("version") or {}).get("number") or 0)) + 1
             current_title = str(latest_data.get("title") or current_title)
-        except Exception:
-            return False
+        except Exception as exc:
+            return {
+                "ok": False,
+                "status": "conflict-refresh-failed",
+                "http_status": 409,
+                "error": str(exc),
+            }
 
-    return False
+    return {
+        "ok": False,
+        "status": "version-conflict-retry-exhausted",
+        "http_status": 409,
+    }
 
 
 def _reanchor_after_overwrite(
@@ -3327,9 +4100,17 @@ def _reanchor_after_overwrite(
         print(
             f"[anchor-preserve] Saving re-anchored storage back to Confluence (timeout {_PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS}s)..."
         )
-        success = _update_page_with_storage(
-            args.base_url, args.page_id, new_version, title, updated_storage, auth, hdrs
+        update_result = _update_page_with_storage(
+            args.base_url,
+            args.page_id,
+            new_version,
+            title,
+            updated_storage,
+            auth,
+            hdrs,
+            allow_conflict_retry=bool(args.allow_reanchor_conflict_retry),
         )
+        success = bool(update_result.get("ok"))
         print(
             "[anchor-preserve] Storage save completed."
             if success
@@ -3337,12 +4118,14 @@ def _reanchor_after_overwrite(
         )
         return {
             "status": "ok" if success else "update-failed",
+            "update_status": str(update_result.get("status") or ""),
             "reanchored": reanchored,
             "skipped": skipped,
             "deleted_anchor_icon_count": deleted_anchor_icon_count,
             "section_found": section_span is not None,
             "payload_storage_html": updated_storage,
             "payload_section_html": payload_section_html,
+            "update_result": update_result,
         }
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
@@ -3730,6 +4513,81 @@ def _build_comment_audit_summary(
     }
 
 
+def _build_risk_assessment(
+    delta: Dict[str, Any],
+    storage_anchor_audit: Dict[str, Any],
+    inline_visibility: Dict[str, Any],
+    recommendation_status: str,
+) -> Dict[str, Any]:
+    details = storage_anchor_audit.get("details") or []
+    orphaned_count = sum(
+        1
+        for item in details
+        if bool(item.get("visible_after_publish"))
+        and not str(item.get("after_anchor_text_preview") or "").strip()
+    )
+    changed_local_context_count = sum(
+        1
+        for item in details
+        if str(item.get("classification") or "") == "reanchored_with_changed_local_context"
+    )
+    not_visible_count = sum(
+        1
+        for item in details
+        if str(item.get("classification") or "") == "not_visible_after_publish"
+    )
+    recoverable_count = int(storage_anchor_audit.get("recoverable_marker_count") or 0)
+    changed_ratio = (
+        round((changed_local_context_count / recoverable_count) * 100.0, 1)
+        if recoverable_count > 0
+        else 0.0
+    )
+
+    visible_markers = int(inline_visibility.get("visible_marker_count") or 0)
+    recoverable_markers = int(inline_visibility.get("recoverable_marker_count") or 0)
+    visibility_gap_count = max(0, recoverable_markers - visible_markers)
+
+    level = "low"
+    reasons: List[str] = []
+    if int(delta.get("active_missing_count") or 0) > 0:
+        level = "critical"
+        reasons.append("active_comments_missing")
+    if not_visible_count > 0:
+        level = "critical"
+        reasons.append("markers_not_visible_after_publish")
+    if visibility_gap_count > 0 and level != "critical":
+        level = "high"
+        reasons.append("visible_marker_gap")
+    if orphaned_count > 0 and level in {"low", "medium"}:
+        level = "high"
+        reasons.append("orphaned_markers_present")
+    if changed_local_context_count >= 3 and level in {"low", "medium"}:
+        level = "high"
+        reasons.append("many_changed_local_context_reanchors")
+    elif changed_local_context_count > 0 and level == "low":
+        level = "medium"
+        reasons.append("changed_local_context_reanchors")
+    if recommendation_status.startswith("warning") and level == "low":
+        level = "medium"
+        reasons.append("warning_recommendation_status")
+
+    manual_review_required = level in {"high", "critical"} or recommendation_status == "review-required"
+    return {
+        "risk_level": level,
+        "manual_review_required": manual_review_required,
+        "reasons": reasons,
+        "signals": {
+            "active_missing_count": int(delta.get("active_missing_count") or 0),
+            "orphaned_marker_count": orphaned_count,
+            "not_visible_marker_count": not_visible_count,
+            "changed_local_context_count": changed_local_context_count,
+            "changed_local_context_ratio_percent": changed_ratio,
+            "recoverable_marker_count": recoverable_count,
+            "visible_marker_gap_count": visibility_gap_count,
+        },
+    }
+
+
 def _extract_compare_snapshot(compare_json: Dict[str, Any]) -> Dict[str, Any]:
     guard = compare_json.get("guard") or {}
     decision = compare_json.get("decision") or {}
@@ -3815,6 +4673,22 @@ def _build_reinjection_payload_audit(
     }
 
 
+def _build_reanchor_conflict_telemetry(reanchor_result: Dict[str, Any]) -> Dict[str, Any]:
+    update_result = reanchor_result.get("update_result") or {}
+    update_status = str(reanchor_result.get("update_status") or update_result.get("status") or "")
+    conflict_detected = update_status.startswith("version-conflict")
+    telemetry = {
+        "reanchor_status": str(reanchor_result.get("status") or ""),
+        "update_status": update_status,
+        "conflict_detected": conflict_detected,
+        "requested_version": update_result.get("requested_version"),
+        "latest_version": update_result.get("latest_version"),
+        "http_status": update_result.get("http_status"),
+        "response_preview": str(update_result.get("response_preview") or "")[:300],
+    }
+    return telemetry
+
+
 def _save_json(path: str, payload: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
@@ -3886,6 +4760,16 @@ def parse_args() -> argparse.Namespace:
         "--require-visible-inline-markers",
         action="store_true",
         help="Fail with a non-zero exit code if active comments cannot all be shown inline after publish.",
+    )
+    parser.add_argument(
+        "--allow-reanchor-conflict-retry",
+        action="store_true",
+        help="Allow retrying re-anchor storage save on version conflict (less strict). Default is fail-closed on conflict.",
+    )
+    parser.add_argument(
+        "--require-low-risk-reanchor",
+        action="store_true",
+        help="Fail with a non-zero exit code if risk_assessment marks manual review required.",
     )
 
     parser.add_argument("--reflect-on-page", action="store_true", help="Enable temporary on-page visual diff reflection")
@@ -4068,11 +4952,23 @@ def main() -> int:
                         f"[anchor-preserve] Recovered {history_supplemented} additional marker(s) from historical compare artifacts."
                     )
             if section_span_before is not None:
+                # Annotate heading_path FIRST so it's available for reconciliation and enrichment
                 old_markers = _annotate_markers_with_heading_path(
                     old_section_html,
                     int(section_span_before[0]),
                     old_markers,
                 )
+                old_markers, reconciled = _reconcile_existing_markers_from_inline_properties(
+                    storage_before,
+                    section_span_before,
+                    old_markers,
+                    inline_props,
+                    owned_refs=owned_refs if open_ref_ids else None,
+                )
+                if reconciled:
+                    print(
+                        f"[anchor-preserve] Reconciled {reconciled} marker(s) from inline comment metadata."
+                    )
                 old_markers, history_enriched = _enrich_markers_from_history(
                     args.output_dir,
                     args.page_id,
@@ -4089,6 +4985,20 @@ def main() -> int:
                 print(
                     f"[anchor-preserve] Seeded {orphan_seeded} top-of-page orphan marker(s) from inline comment metadata."
                 )
+
+            # Attach inline-properties anchor text to each marker for fail-safe recovery
+            # when the visible marker anchor is already blank (orphaned) in old storage.
+            inline_anchor_by_ref = {
+                str(item.get("ref") or ""): str(item.get("anchor_html") or "")
+                for item in before_inline_props
+                if str(item.get("ref") or "") and str(item.get("anchor_html") or "")
+            }
+            if inline_anchor_by_ref:
+                for marker in old_markers:
+                    ref = str(marker.get("ref") or "")
+                    inline_anchor = inline_anchor_by_ref.get(ref, "")
+                    if inline_anchor and _marker_visible_anchor_text(inline_anchor):
+                        marker["inline_anchor_html"] = inline_anchor
         except Exception as exc:
             print(f"[anchor-preserve] Warning: could not fetch page storage before overwrite: {exc}")
 
@@ -4303,6 +5213,20 @@ def main() -> int:
         recommendation_status = "review-required"
         recommendation_message = "Some open comments are missing after overwrite; use compare report and missing preview for manual re-anchor."
 
+    risk_assessment = _build_risk_assessment(
+        delta,
+        storage_anchor_audit,
+        inline_visibility,
+        recommendation_status,
+    )
+    reanchor_conflict_telemetry = _build_reanchor_conflict_telemetry(reanchor_result)
+    if recommendation_status == "ok" and bool(risk_assessment.get("manual_review_required")):
+        recommendation_status = "warning-manual-review-required"
+        recommendation_message = (
+            "Comments were preserved, but risk signals indicate potential placement ambiguity. "
+            "Review storage_anchor_audit and risk_assessment before production sign-off."
+        )
+
     report = {
         "schemaVersion": "1.0",
         "generatedAt": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -4314,6 +5238,8 @@ def main() -> int:
             "apply": bool(args.apply),
             "compare_mode": args.compare_mode,
             "split_level": args.split_level,
+            "allow_reanchor_conflict_retry": bool(args.allow_reanchor_conflict_retry),
+            "require_low_risk_reanchor": bool(args.require_low_risk_reanchor),
         },
         "guard": _extract_compare_snapshot(compare_result),
         "comment_preservation": delta,
@@ -4327,6 +5253,7 @@ def main() -> int:
             "after": after_comment_marker_map,
         },
         "anchor_reinjection": reanchor_result,
+        "reanchor_conflict_telemetry": reanchor_conflict_telemetry,
         "artifacts": {
             "comments_before": os.path.abspath(before_comments_path),
             "comments_after": os.path.abspath(after_comments_path),
@@ -4340,6 +5267,7 @@ def main() -> int:
             "status": recommendation_status,
             "message": recommendation_message,
         },
+        "risk_assessment": risk_assessment,
     }
 
     _save_json(final_report_json, report)
@@ -4380,6 +5308,24 @@ def main() -> int:
     print(f"RESOLVED_AFTER={delta['after_resolved_count']}")
     print(f"RESOLVED_PRESERVED={delta['resolved_preserved_count']}")
     print(f"RESOLVED_SAME_LOCATION={resolved_audit_summary['same_location_count']}")
+    print()
+    print("=== RISK ASSESSMENT ===")
+    print(f"RISK_LEVEL={risk_assessment['risk_level']}")
+    print(f"MANUAL_REVIEW_REQUIRED={str(bool(risk_assessment['manual_review_required'])).lower()}")
+    print()
+    print("=== REANCHOR SAVE STATUS ===")
+    print(f"REANCHOR_STATUS={reanchor_conflict_telemetry['reanchor_status']}")
+    print(f"REANCHOR_UPDATE_STATUS={reanchor_conflict_telemetry['update_status']}")
+    print(f"REANCHOR_CONFLICT_DETECTED={str(bool(reanchor_conflict_telemetry['conflict_detected'])).lower()}")
+
+    if args.require_low_risk_reanchor and bool(risk_assessment.get("manual_review_required")):
+        print()
+        print("LOW_RISK_CHECK=FAILED")
+        print(
+            "Run requires manual review due to placement-risk signals. "
+            "Use risk_assessment.reasons and storage_anchor_audit before production sign-off."
+        )
+        return 3
 
     if args.require_visible_inline_markers and inline_visibility_gap:
         print()
