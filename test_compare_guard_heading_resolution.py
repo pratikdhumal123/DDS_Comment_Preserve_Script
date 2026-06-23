@@ -3,6 +3,7 @@ import pathlib
 import sys
 import tempfile
 import os
+import platform
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "standalone_clone"))
 
@@ -231,6 +232,7 @@ class CompareGuardHeadingResolutionTests(unittest.TestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(payload.get("page_id"), "470213899")
 
+    @unittest.skipIf(platform.system() != "Windows", "Windows path case-insensitivity test - skipped on non-Windows platforms")
     def test_auto_heading_baseline_path_match_is_case_insensitive_on_windows_paths(self):
         markdown = "# Intro\n\n## Alpha\nBody a.\n"
 
