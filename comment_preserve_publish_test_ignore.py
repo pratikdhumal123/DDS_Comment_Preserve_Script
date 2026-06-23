@@ -1156,8 +1156,8 @@ def _load_auto_heading_baseline(
     if int(payload.get("split_level") or 0) != int(split_level):
         return None
 
-    saved_md_path = os.path.abspath(str(payload.get("md_path") or ""))
-    requested_md_path = os.path.abspath(md_path)
+    saved_md_path = os.path.abspath(str(payload.get("md_path") or "")).lower()
+    requested_md_path = os.path.abspath(md_path).lower()
     if saved_md_path != requested_md_path:
         try:
             requested_titles = [
