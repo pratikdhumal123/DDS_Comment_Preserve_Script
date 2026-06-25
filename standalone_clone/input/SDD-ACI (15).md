@@ -19,7 +19,7 @@
 
 
 
-The audience of this document is:
+The audience of this reolaced model:
 
 
 
@@ -30,7 +30,7 @@ The audience of this document is:
 
 
 
-The scope of this document is:
+The scope of this marked content:
 
 **In scope**
 
@@ -44,7 +44,7 @@ The scope of this document is:
 
 
 
-The following table contains the assumptions that have been made in the creation of this document.
+
 
 <caption name="Assumptions">
 
@@ -103,7 +103,7 @@ The following table contains other documents that have been referenced in the cr
 
 
 
-## References
+## Ref detail
 
 
 
@@ -141,7 +141,296 @@ The following table contains other source material that has been referenced in t
 
 
 
-# Random Test
+
+
+
+
+
+
+# mymy pojo
+
+
+
+
+
+
+
+## Hardware Overview
+
+
+
+Cisco Application Centric Infrastructure (ACI) is made up of two components. One is the Application Policy Infrastructure Controller (APIC), which is responsible for managing the Cisco ACI fabric. Physically, it is a Cisco UCS server which can be connected directly to the ACI leaf switches. More information can be found in the [APIC Data Sheet](https://www.cisco.com/c/en/us/products/collateral/cloud-systems-management/application-policy-infrastructure-controller-apic/datasheet-c78-739715.html).
+
+The other component is the content has been chnaged here . Cisco Nexus 9000 switches in ACI mode are the foundation of the ACI network. The Cisco Nexus ACI-Mode Switches [Hardware Support Matrix](https://www.cisco.com/c/dam/en/us/td/docs/Website/datacenter/acihwsupport/index.html) lists the supported hardware models.
+
+Information on supported physical design options is documented in the [Cisco ACI Design Guide](https://www.cisco.com/c/en/us/td/docs/dcn/whitepapers/cisco-application-centric-infrastructure-design-guide.html#PhysicalTopology).
+
+This chapter explains %%customerName's physical infrastructure, its individual components as well as their interconnections.
+
+you seee i am adding a extra line here just for check 
+
+
+
+## Physical Topology
+
+
+
+The Cisco ACI physical topology is based on a spine-leaf architecture, where each leaf switch connects to every spine switch, forming a bipartite graph with no direct leaf-to-leaf or spine-to-spine connections. Leaf switches serve as the connection points for servers, storage, physical or virtual service devices, and external networks, while spine switches some chnages made i wanna check here. This design supports scalability, high bandwidth, and redundancy, and is managed centrally by the Cisco Application Policy Infrastructure Controller (APIC) to automate fabric discovery and configuration.
+
+
+Every ACI switch has a name and an individual node ID. The latter is used by the APIC to reference specific devices for configuration purposes. The following devices are installed in %%customerName's ACI solution:
+
+<caption name="ACI-FABRIC-NAME - Hardware Components">
+
+| Node ID | Node Name | Role | Model | Serial Number | Location | Room | Rack |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+
+</caption>
+
+
+
+
+### Fabric Connectivity
+
+
+
+The following figure de
+picts the overall physical topology of the ACI solution.
+
+
+<caption name="Physical Topology Overview">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Physical_Topology_Overview.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### Leaf and Spine Connectivity
+
+
+
+The table below summarizes the spine-to-leaf connections.
+
+<caption name="Infrastructure Physical Connections">
+
+| Device A | Port A | Transceiver A | Device B | Port B | Transceiver B | Cable Type | Connector Type | Comment |
+|---|---|---|---|---|---|---|---|---|
+| No cabling data found - please populate docascode.tech.shared.cabling.groups with name 'fabric-links' | | | | | | | | |
+
+</caption>
+
+The IaC Data Model for ACI formally defines the format of the data input files. This is an example of how the ACI switches must be defined in the input files:
+
+<caption name="Leaf and Spine Registration Data Model">
+
+```yaml
+apic:
+  node_policies:
+    nodes:
+      - id: 101
+        pod: 1
+        role: leaf
+        serial_number: [node-serial-number]
+        name: Leaf-101
+      - id: 1001
+        pod: 1
+        role: spine
+        serial_number: [node-serial-number]
+        name: Spine-1001
+```
+</caption>
+
+For further information on how the ACI switches are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/node_policies/node_registration/).
+
+
+
+### APIC Connectivity
+
+
+
+The following figure depicts the APIC connectivity pattern to the ACI fabric.
+
+
+<caption name="APIC Connectivity Pattern">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/APIC_Connectivity_Pattern.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+Each APIC has an Eth2/1, and Eth2/2 port connected to different leaf switches. The APIC forms a bond0 interface across these ports for redundancy. Ports being bonded are not working as active/active but in active/standby mode. Only one of two ports is actively communicating with the fabric.
+
+The following tables contain the specific APIC connectivity allocations.
+
+<caption name="APIC Connections">
+
+| Device A | Port A | Transceiver A | Device B | Port B | Transceiver B | Cable Type | Connector Type | Comment |
+|---|---|---|---|---|---|---|---|---|
+| No cabling data found - please populate docascode.tech.shared.cabling.groups with name 'apic-connections' | | | | | | | | |
+
+</caption>
+
+
+<caption name="APIC Connections Physical Topology">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/APIC_Connections_Physical_Topology.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### Remote Leaf Connectivity
+
+
+
+
+
+<caption name="Remote Leaf connections">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Remote_Leaf_connections.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### FEX Connectivity
+
+
+
+
+
+<caption name="Fabric Extender Connections">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Fabric_Extender_Connections.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### External Connectivity
+
+
+
+The following figure depicts the physical connectivity between fabric border leaf switches and external devices (switches, routers, firewalls, etc.).
+
+
+<caption name="External Connectivity Overview">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/External_Connectivity_Overview.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### Firewall/Load Balancer Connectivity
+
+
+
+The table below summarizes external connections to firewalls and load balancers.
+
+<caption name="External Firewall/Load Balancer Connections">
+
+| Device A | Port A | Transceiver A | Device B | Port B | Transceiver B | Cable Type | Connector Type | Comment |
+|---|---|---|---|---|---|---|---|---|
+| No cabling data found - please populate docascode.tech.shared.cabling.groups with name 'external-firewall-lb' | | | | | | | | |
+
+</caption>
+
+
+
+
+### Routers Connectivity
+
+
+
+The table below summarizes external routed connections.
+
+<caption name="External Router Connections">
+
+| Device A | Port A | Transceiver A | Device B | Port B | Transceiver B | Cable Type | Connector Type | Comment |
+|---|---|---|---|---|---|---|---|---|
+| No cabling data found - please populate docascode.tech.shared.cabling.groups with name 'external-routers' | | | | | | | | |
+
+</caption>
+
+
+<caption name="External Router Connections Topology">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/External_Router_Connections_Topology.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### Switches Connectivity
+
+
+
+The table below summarizes external switches connections.
+
+<caption name="External Switch Connections">
+
+| Device A | Port A | Transceiver A | Device B | Port B | Transceiver B | Cable Type | Connector Type | Comment |
+|---|---|---|---|---|---|---|---|---|
+| No cabling data found - please populate docascode.tech.shared.cabling.groups with name 'external-switches' | | | | | | | | |
+
+</caption>
+
+
+<caption name="External Switch Connections Topology">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/External_Switch_Connections_Topology.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### Server Connectivity
+
+
+
+
+<caption name="Server Connections">
+
+| Device A | Port A | Transceiver A | Device B | Port B | Transceiver B | Cable Type | Connector Type | Comment |
+|---|---|---|---|---|---|---|---|---|
+| No cabling data found - please populate docascode.tech.shared.cabling.groups with name 'server-connections' | | | | | | | | |
+
+</caption>
+
+
+
+
+### IPN/ISN Connectivity
+
+
+
+
+
+<caption name="IPN Connections Topology">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/IPN_Connections_Topology.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+### Out-of-band Management Connectivity
+
+
+
+
+
+<caption name="OOB Connections Topology">
+
+![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/OOB_Connections_Topology.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
+</caption>
+
+
+
+
+
+# ui check
 
 
 
@@ -1229,498 +1518,7 @@ Rationale: Cisco recommends daily backups to minimise the risk of losing recent 
 
 
 
-# Fabric Management
 
-
-
-The ACI fabric can be managed out-of-band (OOB) and/or in-band. The out-of-band and in-band management interfaces can be used to allow administrative access to a node in the fabric, e.g., opening a remote terminal connection over SSH to a leaf node. The management interfaces are also used for out-of-band connections from nodes in the fabric, e.g., for remote authentication, sending syslog messages to a remote logging server, etc.
-
-It is highly recommended to provide out-of-band management access to all nodes in the fabric, even if this will not be the primary interface used for monitoring and administrative access. The reason for this is to provide continued management access to the ACI fabric in the event that an issue with the fabric (maybe a bad configuration change) results in loss of in-band management connectivity. With out-of-band management, the network paths to access fabric management interfaces are not reliant on the fabric itself.
-
-It is worth highlighting that it is possible to build an ACI fabric that will be managed in-band exclusively. However, if there is no out-of-band connectivity to the APICs, there will be some challenges during the set-up of the APICs and fabric discovery. It will be necessary to access the APIC GUI in order to register fabric nodes, and this will need to be done via the out-of-band management interface of an APIC. If there are no plans to have an out-of-band network as part of the long term operation of the fabric, then it will be necessary to arrange a temporary solution for access to the APIC out-of-band management interface in order to complete fabric discovery and set-up the in-band management interface of the APICs.
-As described above, the choice to use only in-band management is not recommended by Cisco.
-
-
-
-## APIC management
-
-
-
-The APICs are a physical server appliance, where the hardware is a Cisco UCS C-series server, and the controller application software runs on top in a Linux OS (Operating System). The management of the APIC hardware is achieved through the CIMC (Cisco Integrated Management Controller) that is built-in to the Cisco UCS C-series server.
-
-In a Cisco C-series server, the CIMC has a number of configurable options with regards to what physical interfaces can be used to reach the CIMC management IP interface. For an APIC, the only supported NIC mode is dedicated, which means that the CIMC management IP interface can only be reached via the separate physical port dedicated for CIMC access; dedicated also means that this physical port is not presented to any host operating system running on the server; it can only be used to access the CIMC, not the host OS.
-
-Network connectivity to the APIC OS management IP is possible via the LOM (LAN on Motherboard) ports on the APIC, which are referred to in the APIC configuration guides as the out-of-band management ports. If configured, the APIC OS management IP can also be reached in-band through the 10GE/25GE ports on the Cisco VIC (Virtual Interface Card).
-
-Given that all the APICs must use the dedicated NIC mode for CIMC access, it is necessary to connect this CIMC port on each of the APICs to the management network. This management network should be out-of-band of the ACI fabric.
-
-
-<warning name="Warning">If the CIMC NIC mode is configured to anything other than dedicated, it may prevent the discovery of fabric nodes during fabric discovery.</warning>
-
-In the %%customerName ACI design, all APIC dedicated CIMC ports will be connected to an out-of-band management network to enable management and monitoring of the APIC server hardware.
-
-
-
-### APIC IP Addressing
-
-
-
-For Fabric management setup, IP addresses need to be allocated for the following interfaces on APIC CIMC in the fabric.
-
-The subnets from which IP addresses are allocated to different interfaces on the fabric are defined in the table below.
-
-<caption name="fabric1 - APIC CIMC Fabric Management IP Addressing Summary">
-
-| CIMC APIC Node Name | NodeID | OOB Management/mask | OOB Gateway |
-| --- | --- | --- | --- |
-
-</caption>
-
-The IaC Data Model for ACI formally defines the format of the data input files. This is an example of how APIC management addresses must be defined in the input files:
-
-<caption name="Management IP Addressing Data Model">
-
-```yaml
-apic:
-  node_policies:
-    nodes:
-      - id: 1
-        role: apic
-        serial_number: [node-serial-number]
-        name: APIC-1
-        oob_address: 10.0.0.11/24
-        oob_gateway: 10.0.0.1
-        inb_address: 192.168.1.11/24
-        inb_gateway: 192.168.1.1
-      - id: 2
-        role: apic
-        serial_number: [node-serial-number]
-        name: APIC-2
-        oob_address: 10.0.0.12/24
-        oob_gateway: 10.0.0.1
-        inb_address: 192.168.1.12/24
-        inb_gateway: 192.168.1.1
-      - id: 3
-        role: apic
-        serial_number: [node-serial-number]
-        name: APIC-3
-        oob_address: 10.0.0.13/24
-        oob_gateway: 10.0.0.1
-        inb_address: 192.168.1.13/24
-        inb_gateway: 192.168.1.1 |
-```
-</caption>
-
-For further information on how APIC management addresses are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/node_policies/node_registration/).
-
-
-
-### APIC Hardware Details
-
-
-
-
-
-
-
-### Management Access Methods
-
-
-
-The following table summarizes the different management access methods available for APIC hardware management:
-
-<caption name="APIC Management Access Methods">
-
-| Access Method | Interface | IP Address Source | Use Case |
-| --- | --- | --- | --- |
-| CIMC Management | Dedicated CIMC Port | Out-of-Band Network | Hardware management, BIOS, firmware updates |
-| APIC OOB Management | LOM Ports (eth0) | Out-of-Band Network | APIC OS management, configuration |
-| APIC InB Management | VIC Ports (bond0) | In-Band EPG | APIC OS management via fabric |
-
-</caption>
-
-
-
-### CIMC Access URLs
-
-
-
-Direct HTTPS access to APIC CIMC interfaces:
-
-<caption name="ACI-FABRIC-NAME - CIMC Access URLs">
-
-| Node Name | CIMC IP Address | CIMC HTTPS URL | Purpose |
-| --- | --- | --- | --- |
-
-</caption>
-
-<note name="Note">Ensure proper firewall rules and access controls are in place for CIMC management interfaces.</note>
-
-
-
-### Management Network Connectivity
-
-
-
-
-<tip>Always configure out-of-band management for reliable access to APIC controllers, especially during fabric maintenance or troubleshooting scenarios.</tip>
-
-
-
-## ACI Out-of-Band
-
-
-
-Each node in the fabric has at least one physical interface that provides out-of-band management access to the operating system. For leaf and spine nodes, these are the mgmt0 ports. On the APICs, these are the eth1-1 and eth1-2 ports that correspond to the LOM (LAN on Motherboard) ports.
-
-The APICs also have a dedicated "lights-out" management port that provides out-of-band management access to the underlying server's CIMC (Cisco Integrated Management Controller) that allows management and monitoring of the server hardware platform.
-
-If out-of-band management is used, the network path to/from the out-of-band network does not transit the ACI fabric. The following approach is used, i.e., keeping the ACI fabric out of the data path for connections to the out-of-band management interfaces of fabric nodes. This is to avoid any dependency on the ACI fabric for access to the out-of-band management interface of a node in the ACI fabric.
-
-Technically, it would be possible to create a design where the network path to/from the OOB network is via the ACI fabric (ACI as a transit network to reach the OOB network). A decision to ignore Cisco's general recommendation would carry the risk that errors on the ACI fabric could cut-off out-of-band management access.
-
-The following nodes will have their out-of-band management interfaces connected to the out-of-band management network:
-
-- All APIC eth1-1 or eth1-2 interfaces (OOB Mgmt). %%customerName will only connect one of the two.
-- All spine mgmt0 interfaces (on both supervisors).
-- All leaf mgmt0 interfaces.
-- All UCS server's CIMC interfaces, those of the APIC servers.
-
-For further information regarding the physical out-of-band connectivity, refer to the OOB Connectivity Section in the ACI Physical design chapter.
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.004">
-Out-of-band management connectivity will be provided to all nodes in the fabric, and the OOB network path will not transit the ACI fabric.
-<br><br>
-Rationale: Cisco highly recommends that the OOB management network path does not traverse the ACI fabric itself. This avoids a circular dependency where a fabric issue could simultaneously cut off management access to the very devices that need troubleshooting. Dedicated OOB connectivity ensures continued administrative access during fabric outages or misconfigurations.
-</tip>
-<br><br>
-
-
-
-
-### OOB Management Access Policy
-
-
-
-Each OOB interface on the nodes in the fabric represents an endpoint. The ACI policy model puts endpoints into an EPG (EndPoint Group), and the OOB management interfaces are no exception; they are associated with a special EPG called an out-of-band management EPG. This association is formed by allocating nodes to an OOB management EPG. Each node in the EPG is assigned an IP address, either by static assignment, or automatically from a pool associated with the EPG. The allocated IP address is then configured on the OOB management port of the corresponding node.
-
-The following figure shows an overview of the Mgmt Tenant out-of-band fabric management access policy:
-
-
-<caption name="ACI Out-of-band Management Access Policy">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/ACI_Out-of-band_Management_Access_Policy.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-The management profile includes the out-of-band EPG MO (Managed Object) that provides access to management functions via the out-of-band contract (vzOOBBrCP). The out-of-band contract enables the external management instance profile (mgmtExtInstP) EPG to consume the out-of-band EPG. This exposes the fabric node OOB management interfaces to locally or remotely connected devices, according to the policy configured in the contract. For example, if the OOB contract permits TCP port 22, this will allow SSH access to the OOB management interfaces from a remote SSH client.
-
-The External Management Network Instance Profile specifies one or more subnets. These subnets effectively identify the external endpoints (by their IP address) that belong to the external management instance profile, which can be considered as an external EPG. Endpoints within the IP ranges specified by the subnets are permitted to communicate to/from the OOB management EPG using the protocols and ports permitted by the out-of-band contract. If an external device is not within the range of the subnets configured in the external management instance profile, they will not have out-of-band access.
-
-To provide and consume contracts for OOB devices using default/common contract (Permit Any/Any) you should run two steps:
-
-Step 1- Providing contract.
-
-Provide the appropriate contract. This could be default/common contract or a specific contract you have created.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how the Provided Out-of-Band Contracts must be defined in the input files:
-
-<caption name="Out-of-band Endpoint Group Data Model">
-
-```yaml
-apic:
-  tenants:
-    - name: mgmt
-      oob_contracts:
-        - name: OOB-CON1
-          alias: OOB-SUB-ALIAS
-          description: My Desc
-          scope: context
-          subjects:
-            - name: OOB-SUB
-              filters:
-                - filter: ALL
-```
-</caption>
-
-For further information on how the Provided Out-of-Band Contracts are defined in the IaC Data Model for ACI, please refer to the Network-as-Code (NaC) documentation for [OOB Endpoint Groups](https://netascode.cisco.com/docs/data_models/apic/tenants/oob_endpoint_group/) and [OOB Contracts](https://netascode.cisco.com/docs/data_models/apic/tenants/oob_contract/).
-
-Step 2- Consuming the contract.
-
-- Consume the same contract that has been provided in step 1.
-- Enter the subnet(s) that are allowed to have access to the OOB network (0.0.0.0/0 permits any).
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how the Consumed Out-of-Band Contracts must be defined in the input files:
-
-<caption name="External Management Instance Data Model">
-
-```yaml
-apic:
-  tenants:
-    - name: mgmt
-      ext_mgmt_instances:
-        - name: EXT1
-          subnets:
-            - 0.0.0.0/0
-          oob_contracts:
-            consumers:
-              - OOB-CON1
-```
-</caption>
-
-For further information on how the Consumed Out-of-Band Contracts are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/tenants/oob_ext_mgmt_instance/).
-
-
-
-## ACI In-Band
-
-
-
-It is possible to configure each node in the fabric with an in-band management interface, which provides management access to the device. This is a logical interface on each node that sits in the built-in Mgmt Tenant and can be accessed via in-band network connections, i.e., via the main leaf node fabric ports.
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.005">
-In-band management access will be configured as a backup to out-of-band management, with appropriate access policies and security controls in place.
-<br><br>
-Rationale: This section can be included for reference in case in-band management is required.
-</tip>
-<br><br>
-
-
-
-
-### INB Management Access Policy
-
-
-
-Each INB interface on the nodes in the fabric represents an endpoint. The ACI policy model puts endpoints into an EPG (EndPoint Group), and the INB management interfaces are no exception; they are associated with a special EPG called an in-band management EPG. This association is formed by allocating nodes to an INB management EPG. Each node in the EPG is assigned an IP address, either by static assignment, or automatically from a pool associated with the EPG. The allocated IP address is then configured on the INB management interface (which will be a VLAN interface) of the corresponding node.
-
-The following figure shows an overview of the Mgmt Tenant in-band fabric management access policy:
-
-
-<caption name="ACI In-band Management Access Policy">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/ACI_In-band_Management_Access_Policy.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-The management profile includes the in-band EPG MO (Managed Object) that provides access to management functions via a contract (vzBrCP). The contract used for in-band management EPGs is just a standard contract; they are not special contracts like those used for out-of-band management. The contract used for in-band management enables other EPGs to consume the in-band EPG. This exposes the fabric node INB management interfaces to locally or remotely connected devices, according to the policy configured in the contract. For example, if the INB contract permits TCP port 161, this will allow SNMP polling to the INB management interfaces from a management station, connected via an application EPG, L2 Out or L3 Out.
-
-If using EPG extension (of the "Application EPG"), it is possible to put the Application EPG into the same bridge domain as the "In-band EPG". This would typically be used where the in-band management IP interfaces of ACI components (which sit in the In-band EPG) will use a default gateway that is external to the fabric. In this model it is not necessary to configure a subnet on the BD associated with the In-band EPG. Alternatively, the Application EPG can be in a separate bridge domain, which would require traffic to be routed externally between the subnet associated with Application EPG and that of the In-band EPG, which is the subnet for the BD configured for the In-band EPG.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how to define an In-band Endpoint Group :
-
-<caption name="In-band Endpoint Group Data Model">
-
-```yaml
-apic:
-  tenants:
-    - name: mgmt
-      inb_endpoint_groups:
-        - name: INB
-          vlan: 2
-          bridge_domain: inb
-          contracts:
-            consumers:
-              - STD-CON1
-            providers:
-              - STD-CON1
-```
-</caption>
-
-For further information on how the In-band Endpoint Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/tenants/inb_endpoint_group/).
-
-
-
-## ACI IP Addressing
-
-
-
-For Fabric Management setup, IP addresses need to be allocated for the following interfaces on different nodes in the fabric:
-
-- Leaf node OOB and/or INB management.
-- Spine node OOB and/or INB management.
-- APIC OOB and/or INB management.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how the OOB and INB IP addresses need to be defined in the input file.
-
-<caption name="Management IP Addressing Data Model">
-
-```yaml
-apic:
-  node_policies:
-    nodes:
-      - id: 101
-        oob_address: 10.1.1.1/24
-        oob_gateway: 10.1.1.254
-        inb_address: 10.10.10.1/24
-        inb_gateway: 10.10.10.254
-      - id: 1001
-        oob_address: 10.1.1.10/24
-        oob_gateway: 10.1.1.254
-        inb_address: 10.10.10.10/24
-        inb_gateway: 10.10.10.254
-```
-</caption>
-
-This is an example of parameters for INB management (BD, VRF, L3Out etc) and OOB management contract:
-
-<caption name="INB Management Data Model">
-
-```yaml
-apic:
-  access_policies:
-    leaf_switch_profiles:
-      - name: LEAF1001_INB
-        selectors:
-          - name: SEL1_INB
-            node_blocks:
-              - name: BLOCK_INB
-                from: 1001
-        interface_profiles:
-          - LEAF1001_INB
-    leaf_interface_profiles:
-      - name: LEAF1001_INB
-        selectors:
-          - name: SEL1_INB
-            policy_group: PG_INB
-            port_blocks:
-              - name: BLOCK_INB
-                description: Inband MGMT
-                from_port: 1
-    leaf_interface_policy_groups:
-      - name: PG_INB
-        description: Inbound Policy Group
-        type: access
-        link_level_policy: 10G
-        cdp_policy: CDP-ENABLED
-        lldp_policy: LLDP-ENABLED
-        spanning_tree_policy: BPDU-FILTER
-        mcp_policy: MCP-ENABLED
-        l2_policy: PORT-LOCAL
-        storm_control_policy: 10P
-        port_channel_policy: LACP-ACTIVE
-        port_channel_member_policy: FAST
-        aaep: AAEP_INB
-    aaeps:
-      - name: AAEP_INB
-        infra_vlan: true
-        physical_domains:
-          - PHY_INB
-    physical_domains:
-      - name: PHY_INB
-        vlan_pool: VLAN_POOL_INB
-    vlan_pools:
-      - name: VLAN_POOL_INB
-        description: "Inband MGMT VLAN Pool"
-        allocation: static
-        ranges:
-          - from: 4000
-            role: external
-            description: "Inband VLAN Pool Range"
-  tenants:
-    - name: 'mgmt'
-      bridge_domains:
-        - name: 'inb'
-          unknown_unicast: proxy
-          vrf: inb
-          subnets:
-            - ip: 10.x.x.x/24
-              public: true
-              private: false
-      inb_endpoint_groups:
-        - name: 'EPG_INB'
-          vlan: 3913
-          bridge_domain: inb
-          contracts:
-            consumers:
-              - CON_L3O
-            providers:
-              - CON_MGMT
-      l3outs:
-        - name: 'L3O_MGMT'
-          vrf: inb
-          domain: DOM_L3O_CORE
-          node_profiles:
-            - name: 'LNP_1103'
-              nodes:
-                - node_id: 1103
-                  router_id: 22.1.194.2
-              interface_profiles:
-                - name: 'LIP_1103'
-                  interfaces:
-                    - node_id: 1103
-                      port: 48
-                      ip: 22.1.193.0/31
-                      vlan: 1500
-                      bgp_peers:
-                        - ip: 22.1.193.1
-                          remote_as: 64900
-                    - node_id: 1103
-                      port: 47
-                      ip: 22.1.193.2/31
-                      vlan: 1500
-                      bgp_peers:
-                        - ip: 22.1.193.3
-                          remote_as: 64900
-          external_endpoint_groups:
-            - name: 'EXTEPG_MGMT'
-              subnets:
-                - prefix: 0.0.0.0/0
-              contracts:
-                providers:
-                  - CON_L3O
-          export_route_map:
-            type: global
-            contexts:
-              - name: RCONTROL
-                match_rule: MATCH_MGMT
-      contracts:
-        - name: 'CON_L3O'
-          subjects:
-            - name: 'SBJ_L3O'
-              filters:
-                - filter: FLT_PERMIT_ANY
-        - name: 'CON_MGMT'
-          subjects:
-            - name: 'SBJ_MGMT'
-              filters:
-                - filter: FLT_PERMIT_ANY
-      oob_contracts:
-        - name: 'CON_OOB'
-          subjects:
-            - name: 'SUB_OOB'
-              filters:
-                - filter: FLT_PERMIT_ANY
-  policies:
-    match_rules:
-      - name: 'MATCH_MGMT'
-        prefixes:
-          - ip: 22.1.200.0/24
-          - ip: 22.1.201.0/24
-```
-</caption>
-
-For further information on how the OOB and INB IP addresses are defined in the IaC Data Model for ACI, please refer to the Network-as-Code (NaC) documentation for [OOB Node Addresses](https://netascode.cisco.com/docs/data_models/apic/node_policies/oob_node_address/) and [INB Node Addresses](https://netascode.cisco.com/docs/data_models/apic/node_policies/inb_node_address/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.006">
-For this design, OOB management IP addresses for all nodes will be configured using static assignment
-<br><br>
-Rationale: IP addresses will be assigned statically to control which address is assigned to which device based on the IP addressing convention
-</tip>
-<br><br>
-
-<tip name="Design Decision DD.007">
-For this design, INB management IP addresses for all nodes will be automatically allocated from an address pool.
-<br><br>
-Rationale: IP addresses will be automatically allocated from an address pool which simplifies configuration in a large scale fabrics
-</tip>
-<br><br>
 
 
 
@@ -2682,1764 +2480,7 @@ In ACI Tags can be defined and then associated to logical objects. Tags are a co
 
 
 
-# Access Polices
 
-
-
-Fabric Access Policies are policies that are used to control parameters related to Fabric Access, such as which VLAN range to use on a leaf and which Interface Policies to configure on fabric external-facing interfaces.
-
-
-
-## Domains, Pools and AAEP
-
-
-
-The chapter on ACI Access Policies - Domains, Pools, and AAEPs provides an overview of how these components work together to define and manage network access within the ACI fabric. It explains that Domains specify the scope of VLAN pools applied to interfaces, VLAN Pools identify the VLANs used on interfaces, and Attachable Access Entity Profiles (AAEPs) link these domains and VLAN pools to physical infrastructure and interface policies, enabling consistent and controlled deployment of VLANs across the fabric. This chapter also covers the importance of mapping domains to ports via AAEPs to enforce policy and restrict VLAN usage, ensuring proper network segmentation and operational consistency.
-
-
-
-### VLAN Pools
-
-
-
-A pool represents a range of traffic encapsulation identifiers (for example, VLAN IDs, VNIDs, and multicast addresses). A pool is a shared resource and can be consumed by multiple domains such as physical domains, external routed domains, Virtual Machine Manager (VMM), etc.
-
-Two types of VLAN-based pools exist.
-
-- Dynamic pools - Dynamic pools are managed internally by the APIC to allocate VLANs for End Point Groups (EPGs). Dynamic pools are primarily used in combination with VMM integration.
-- Static pools - Static pools are managed through the static configuration of EPG bindings. An EPG has a relation to the domain, and the domain has a relation to the pool. The pool contains a range of encapsulation VLANs. For static EPG deployments, it is required to define the interface and the encapsulation. The encapsulation must be within the range of a VLAN pool that is associated to a domain to which the EPG is associated.
-
-A VLAN Pool is associated to one or multiple Encapsulation Blocks. An encapsulation block defines a VLAN Id Range.
-
-There are three Allocation Modes for the Encapsulation Block:
-
-- Dynamic Allocation - when a VLAN is required, the VLAN is dynamically chosen from the Block.
-- Static Allocation - when a VLAN is required, the user needs to statically choose it from the Block.
-- Inherit allocMode from parent (default) - the mode at Encap level is taken from the mode set for the parent VLAN Pool.
-
-The combination of VLAN Pool and Encapsulation block allocation mode configuration is translated into the following use cases:
-
-- Encap Pool Static, Encap Block Static or Inherit : Non VMM integrated static paths. The VLAN is manually chosen by the user.
-- Encap Pool Dynamic, Encap Block Dynamic or Inherit: VMM integration EPGs. VLAN is chosen by ACI from the pool, and the same VLAN is pushed to the virtual domain port-group.
-- Encap Pool Dynamic, Encap Block Static: VMM Integration EPGs. VLAN is manually chosen from the pool by the user. The same VLAN is pushed to the virtual domain port-group.
-- Encap Pool Static, Encap Block Dynamic: This is invalid configuration, and it will be blocked.
-
-An Encapsulation Block has also a role:
-
-- External or on the wire encapsulations-(Default): Used for allocating VLANs for each EPG assigned to the domain. The VLANs are used when packets are sent to or from leaf switches.
-- Internal: Used for private VLAN allocations in the internal vSwitch by the Cisco ACI Virtual Edge (AVE). The VLANs are not seen outside the ESX host or on the wire.
-
-Ranges of VLANs should be divided into blocks. VLAN blocks are the entities that can be added or deleted as a whole in the VLAN Pool. You cannot delete a single VLAN if this is part of a range in a VLAN block, you can only delete the entire block. Adding a VLAN block containing a single VLAN is also possible and there is no limitation in the amount of block that can be added.
-
-VLAN Pools have a one-to-one relation with physical or virtual domains. Please refer to the domain guidelines.
-
-In the %%customerName design, the following VLAN pools will be created:
-
-<caption name="ACI-FABRIC-NAME - VLAN POOL Definition">
-
-| VLAN Pool Name | Allocation Mode | Ranges |
-| --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how VLAN Pools need to be defined in the input files:
-
-<caption name="VLAN Pools Data Model">
-
-```yaml
-apic:
-  access_policies:
-    vlan_pools:
-      - name: STATIC1
-        description: "Static VLAN Pool"
-        allocation: static
-        ranges:
-          - from: 4000
-            to: 4002
-            role: external
-            description: "Range #1"
-```
-</caption>
-
-For further information on how VLAN Pools are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/vlan_pool/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.013">
-VLAN ranges will be allocated in discrete blocks rather than pre-allocating the complete available range, allowing incremental expansion as needed.
-<br><br>
-Rationale: Cisco recommends allocating VLANs in smaller blocks because VLAN blocks are the atomic unit for addition and deletion within a VLAN pool. This approach provides operational flexibility for future expansion without requiring the removal and re-creation of large contiguous ranges.
-</tip>
-<br><br>
-
-
-
-
-### Domains
-
-
-
-In ACI, a domain represents a logical grouping that ties together physical and virtual networking components, policies, and configurations within the ACI fabric. There are four different domain types:
-
-- Physical domains
-- External bridged domains
-- L3 domains External routed domains
-- VMM domains
-
-Different domain types are created depending on how a device is connected to the leaf nodes:
-
-- Physical domains are generally used for bare metal servers and servers where hypervisor integration is not used.
-- External bridged domains are used for Layer-2 connections. For example, an external bridge domain could be used to connect an existing switch trunk to a leaf switch. Typically, external bridge domain is used when two or more EPGs need to share the same Layer-2 connection.
-- L3 Domain or External routed domains are used for Layer-3 connections.
-- VMM Domains are used for hypervisor integration.
-- Fibre Channel Domains used for FCoE F ports or NP ports connections.
-
-Domains define available VLANs that can be consumed by a tenant EPG on a particular leaf port. Associating a VLAN pool to a domain creates this relationship.
-
-Physical Domains can be defined per device groups (for example DC Firewall) or in relation to Security Domains (more information about Security Domains can be found in the Fabric Administration Chapter). There is a verified scalability limit of 10 domains per leaf switch.
-
-Domains are configured under: Fabric - Access Policies - Physical and External Domains
-
-In the %%customerName design, the following Domains will be created:
-
-<caption name="ACI-FABRIC-NAME - Domain Name Domain Type Associated VLAN POOL">
-
-| Domain Name | Domain Type | Associated VLAN POOL |
-| --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Domains need to be defined in the input files:
-
-<caption name="Domains Data Model">
-
-```yaml
-apic:
-  access_policies:
-    physical_domains:
-      - name: PHY1
-        vlan_pool: ROUTED1
-    routed_domains:
-      - name: ROUTED1
-```
-</caption>
-
-For further information on how Domains are defined in the IaC Data Model for ACI, please refer to the Network-as-Code (NaC) documentation for [Physical Domains](https://netascode.cisco.com/docs/data_models/apic/access_policies/physical_domain/) and [Routed Domains](https://netascode.cisco.com/docs/data_models/apic/access_policies/routed_domain/).
-
-
-
-### AAEP
-
-
-
-An Attachable Entity Profile (AEP) represents a group of external entities with similar infrastructure policy requirements.
-
-The attachable access entity profile (AAEP) is used to map domains (physical or virtual) to interface policies; an AEP is required to deploy VLAN pools on leaf switches and it implicitly provides the scope of the VLAN pool to the physical infrastructure. AAEPs will be added to Interface Policy Groups.
-
-As a concrete example, if vlan-100 belongs to the VLAN-Pool referenced by the AAEP-1, and AAEP-1 is associated to an Interface Policy-Group for interface Eth1/1 in Node-101, that means vlan-100 can now be used in Node-101. Vlan-200, conversely, cannot be used yet since it does not belong to that VLAN-Pool.
-
-In addition, AAEPs allow a one-to-many relationship (if desired) to be formed between interface policy groups and domains as shown in the following figure:
-
-
-<caption name="Attachable Access Entity Profile">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Attachable_Access_Entity_Profile.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-It is important to note that:
-
-- The AEP defines the range of allowed VLANs, but it does not provision them.
-- No traffic flows unless an EPG is deployed on the port.
-- Without defining a VLAN pool in an AEP, a VLAN is not enabled on the leaf port even if an EPG is provisioned.
-- A particular VLAN is provisioned or enabled on the leaf port that is based on EPG events either statically binding on a leaf port or based on VM events from external controllers such as VMware vCenter or Microsoft Azure Service Center Virtual Machine Manager (SCVMM).
-
-The AAEP can also be used to extend the infrastructure VLAN on a port.
-
-In the %%customerName design, a separate AAEP will be defined for leaf ports connecting to servers and network devices, such as routers, firewalls, load balancers, etc., based on the type and purpose of the device that will be connected to that port.
-
-The following AAEPs will be initially defined:
-
-<caption name="AAEP Definition">
-
-| AAEP name | Domain | Include infra VLAN | Usage |
-| --- | --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how AAEPs need to be defined in the input files:
-
-<caption name="AAEP Data Model">
-
-```yaml
-apic:
-  access_policies:
-    infra_vlan: true
-    aaeps:
-      - name: AAEP1
-        physical_domains:
-          - PHY1
-        routed_domains:
-          - ROUTED1
-        vmware_vmm_domains:
-          - VMM1
-        endpoint_groups:
-          - tenant: ABC
-            application_profile: AP1
-            endpoint_group: EPG1
-            vlan: 1234
-            mode: untagged
-            deployment_immediacy: immediate
-```
-</caption>
-
-For further information on how AAEPs are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/aaep/).
-
-
-
-### Guidelines for VLAN Pools, Domains and AEPs
-
-
-
-In a traditional data center, a VLAN is spanned across a number of switches and devices to place the required end points in a single broadcast domain and/or Layer 3 subnet. In an ACI environment, the end points are placed in a single broadcast domain by having membership to an End Point Group (EPG) which in turn is placed on a specific Bridge Domain (BD).
-
-
-<caption name="Non-overlapping VLANs">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Non-overlapping_VLANs.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-VLAN pools and Physical Domains are defined based on the type of physical device connecting to the ACI Fabric, for example a High Availability pair of Firewalls. In an EPG where multiple devices are statically bound, for example, Virtual Machines, Load Balancers, and Firewalls; each device type is bound with their own specific Domain which contains non-overlapping VLANs. The figure below exhibits the definition of non-overlapping VLAN pools per device type bound to a single EPG.
-
-In scenarios where it is highly desired to use a single VLAN for binding of different device types to a single EPG; a common VLAN pool and a common Physical Domain can be additionally defined and associated with device specific AEPs.
-
-
-<caption name="Common VLAN Pool and Physical Domain">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Common_VLAN_Pool_and_Physical_Domain.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-A common VLAN Pool and Physical Domain are used when the same VLAN identifier is required for binding multiple physical device types into a single EPG.
-
-
-
-## Access Polices
-
-
-
-Access policies enable the configuration of:
-
-- Internal Facing Interfaces that connect to the hosts (virtual or physical), storage, firewalls and Fabric Extenders (FEXs).
-- External Facing Interfaces that connect to the multi-pod/multi-site network devices and any routers/switches that are part of an outside network.
-- Ports such as individual ports, port channels, and virtual port channels (vPC).
-- Protocols such as Link Layer Discovery Protocol (LLDP), Cisco Discovery Protocol (CDP), and Link Aggregation Control Protocol (LACP).
-- Features such as statistics gathering, monitoring, and diagnostics.
-
-
-<caption name="Access Policies - Object Relationship">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Access_Policies-Object_Relationship.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-Access policies are grouped into the following categories:
-
-- Switch Policies: specify which switches to configure and the switch configuration policy.
-- Module Policies: specify which leaf switch access cards and access modules to configure and the leaf switch configuration policy.
-- Interface Policies: specify which access interfaces to configure and the interface configuration policy.
-- Global Policies: enable the configuration of DHCP, QoS, and attachable access entity (AEP) profile functions that can be used throughout the fabric. AEP profiles provide a template to deploy hypervisor policies on a large set of leaf ports and associate a Virtual Machine Management (VMM) domain and the physical network infrastructure. They are also required for Layer 2 and Layer 3 external network connectivity.
-- Pools: specify VLAN, VXLAN, and multicast address pools. A pool is a shared resource that can be consumed by multiple domains such as VMM and Layer 4 to Layer 7 services. A pool represents a range of traffic encapsulation identifiers (for example, VLAN IDs, VNIDs, and multicast addresses).
-- Physical and External Domains Policies:
-- External bridged domain Layer 2 domain profiles contain the port and VLAN specifications that a bridged Layer 2 network connected to the fabric uses.
-- External routed domain Layer 3 domain profiles contain the port and VLAN specifications that a routed Layer 3 network connected to the fabric uses.
-- Physical Domain Policies contain physical infrastructure specifications, such as ports and VLAN, used by a tenant or endpoint group.
-- Monitoring and troubleshooting Policies: specify what to monitor, thresholds, how to handle faults and logs, and how to perform diagnostics.
-
-**Access Policies - Reuse**
-
-Whereas a traditional command line interface on a switch generally requires a port-by-port configuration, ACI allows definition of objects and policies that can be reused. The reusability of these policies makes it possible to replicate the configuration of a switch very easily.
-
-
-<caption name="Policy Reuse Comparison">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Policy_Reuse_Comparison.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-In a small data center, the configurations of a few switches do not require many processes or automation. As the data center size increases, automation becomes more and more critical as it has a direct impact on the cost of business operations.  In traditional networks, when significant changes affecting many devices are required, operators must invest time and resources in creating processes to manage those devices effectively. These can be network management tools, scripts, or specialized applications. By utilizing the Cisco ACI policy model, operators can use Fabric Access Policies to simplify the process of adding and managing devices. This is what is depicted as the policy re-use inflection point in the previous diagram.
-
-<info name="Note">Virtual Port Channel Policy Groups cannot be reused. Every vPC requires its dedicated Policy Group.</info>
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.014">
-Fabric Access Policies will be standardised and re-used across the deployment wherever possible.
-<br><br>
-Rationale: Cisco recommends standardising and reusing access policies to simplify switch onboarding, reduce configuration drift, and lower the operational cost of managing a growing number of fabric nodes. Reusable policies ensure consistent behaviour across all leaf and spine switches.
-</tip>
-<br><br>
-
-
-
-
-## Interfaces
-
-
-
-The chapter on Interfaces in Access Policies provides an overview of the configuration and policies applied to leaf switch interfaces that connect to edge devices in the Cisco ACI fabric. It covers key elements such as interface policies (including VLAN scope, LACP, LLDP, CDP), interface profiles, port channels, and virtual port channels, which are essential for managing physical connectivity and ensuring consistent policy enforcement at the fabric edge. This chapter also explains how interface policy groups and profiles are used to define interface settings and how these are linked to VLAN pools and attachable access entity profiles (AAEPs) to enable scalable and reusable access layer configurations across the fabric.
-
-
-The Interface Policy Groups collect all the interface policies required for the specific connectivity.
-
-An Interface Profile can be seen as a container for interface selectors.
-
-Interface Selectors are used to select an individual port or port ranges and to associate those with an Interface Policy Group.
-
-Interface Profiles are then associated to Switch Profiles in order to link ports and their Interface Policy Group to switches.
-
-Distinct Interface Profiles are created for Leaf Switches and Spine Switches.
-
-
-<caption name="Interface Profile Object Relationship">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Interface_Profile_Object_Relationship.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-
-
-### Interface Policy Groups
-
-
-
-Interface Policy Groups are templates used to dictate ports behavior. Interface policy groups use the interface policies described in previous section to specify how links should behave.
-
-An Interface policy group is also associated to an AAEP and to a switch port through Interface selector. This double association (AAEP and interface) will result in associating a set of domains and their VLAN Pool to a switch interface.
-
-There are three types of interface policy groups depending on link type:
-
-- Access Ports (individual)
-- Port channel
-- Virtual Port Channel (vPC)
-
-The type of interface policy groups will have an impact on how it will be used within the ACI Fabric.
-
-A unique interface policy group should be defined for each port channel and virtual port channel, as an interface policy is the triggering object for generating a port-channel interface when the configuration is applied to the leaf nodes. Each host connected to the ACI Fabric by means of a vPC or a Port-Channel will require a unique vPC or PC Policy Group.
-
-An access port policy group can be reused for all interfaces having the same Interface policy and AAEP requirements.
-
-A Port-channel Interface policy group is associated to a single switch profile, whereas vPC interface policy-groups need to be associated to two switches, which in turn form the vPC domain.
-
-In the %%customerName ACI design, the Interface Policy Group configuration will follow these guidelines:
-
-- One Access Interface Policy Group per type of bare metal device and connectivity settings. This will be reused for all links with similar configuration options.
-- One Port-Channel Interface Policy Group per Port-Channel interface, as they cannot be reused.
-- One vPC Interface Policy Group per vPC interface, as they cannot be reused.
-
-The Interface Policy Group will define the list of interface policies to be used for the port, such as link speed, CDP policy, STP policy, storm control policy to be applied. You must also associate the Interface Policy Group with the AEEP that contains the domain(s) with their corresponding VLAN pools, from which a VLAN can then be derived when the port is bound to an End Point Group.
-
-The following table shows the Interface Policy Groups that are foreseen for the initial implementation of the %%customerName fabric.
-
-<caption name="ACI-FABRIC-NAME - Sample Leaf Access and vPC PC Interface Policy Group">
-
-| Name | Description |
-| --- | --- |
-</caption>
-
-<note name="Note">A full list of the required Interface Policy Groups is included in the NIP.</note>
-
-Leaf and Spine switches use distinct interface policy-group types. Spine switches currently only support Access Port policy groups.
-
-
-
-#### Leaf Access Ports Interface Policy Groups
-
-
-
-An Access Port Interface policy group can be potentially reused by Hosts sharing the same connectivity requirements (Interface policies) and AAEP attachment.
-
-For the %%customerName ACI design, the naming convention for the Leaf Access Port Interface Policy Groups will be: ACC_[purpose]_IPG
-
-Where, purpose is the type of server or end host that connects to the ACI fabric without link aggregation.
-
-For instance, if Server 2, Server 3, and Server 5 are each either single or dual homed, and don't require Link Aggregation, then, potentially, a single Access IPG could be used for all connections:
-
-- ACC_SERVER_IPG
-
-
-<caption name="Access Interface Policy Groups example">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Access_Interface_Policy_Groups_example.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-The following table shows the values of one Access Interface Policy Group that will be defined in the %%customerName design:
-
-<caption name="ACI-FABRIC-NAME - Access Port Interface Policy Group">
-
-| Policy Group Name | AAEP | Link Level Policy | CDP Policy | LLDP Policy | Spanning Tree Policy |
-| --- | --- | --- | --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Access Leaf Interface Policy Groups need to be defined in the input files:
-
-<caption name="Access Ports Interface Policy Group Data Model">
-
-```yaml
-apic:
-  access_policies:
-    leaf_interface_policy_groups:
-      - name: SERVER1
-        description: Server1
-        type: access
-        link_level_policy: 10G
-        cdp_policy: CDP-ENABLED
-        lldp_policy: LLDP-ENABLED
-        spanning_tree_policy: BPDU-FILTER
-        mcp_policy: MCP-ENABLED
-        l2_policy: PORT-LOCAL
-        storm_control_policy: 10P
-        port_channel_policy: LACP-ACTIVE
-        port_channel_member_policy: FAST
-        aaep: AAEP1
-```
-</caption>
-
-For further information on how Access Leaf Interface Policy Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_leaf_interface_policy_group/).
-
-
-
-#### Leaf Virtual Port Channel and Port Channel Policy Groups
-
-
-
-One virtual Port-Channel (vPC) or Port-channel Interface Policy-group will be created per vPC connected to a host.
-
-One ad-Hoc vPC/PC Interface Policy Group will be used per device connected to the ACI Fabric.
-
-For the %%customerName ACI design, the naming convention for the vPC/PC Interface Policy Groups will be: 
-
-IPG type:
-
-- VPC = Virtual Port Channel Interface Policy Group
-- PC = Port Channel Interface Policy Group
-
-For instance, if Server 1 and Server 7 are both dual homed and require Link Aggregation and LACP, then two separate vPC/PC IPGs are needed:
-
-- VPC_SRV1_IPG
-- VPC_SRV7_IPG
-
-
-<caption name="vPC Interface Policy Groups example">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/vPC_Interface_Policy_Groups_example.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-The following table shows the values of a sample vPC Interface Policy Group that could be defined in the %%customerName design:
-
-<caption name="ACI-FABRIC-NAME - vPC Interface Policy Groups">
-
-| Name | Link Level | CDP Policy | LLDP Policy | AAEP | Port-channel Policy | MCP Policy | Storm Control | STP Policy |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-</caption>
-
-<note name="Note">One separate vPC/PC Interface Policy Group will be defined for each end host that requires link aggregation. This type of Interface Policy Groups cannot be reused.</note>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how VPC Leaf Interface Policy Groups need to be defined in the input files:
-
-<caption name="Virtual Port Channel Policy Group Data Model Example">
-
-```yaml
-apic:
-  access_policies:
-    leaf_interface_policy_groups:
-      - name: IPG_VPC_LEGACY_POD1
-        type: vpc
-        link_level_policy: LINK_AUTO_AUTO
-        port_channel_policy: LACP_ACTIVE
-        cdp_policy: CDP_ENABLE
-        lldp_policy: LLDP_ENABLE
-        spanning_tree_policy: BPDU_PASS
-        l2_policy: GLOBAL_SCOPE
-        mcp_policy: MCP_DISABLE
-        aaep: AEP_PHY_LEGACY
-```
-</caption>
-
-For further information on how VPC Leaf Interface Policy Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_leaf_interface_policy_group/).
-
-
-
-#### Spine Interface Policy Groups
-
-
-
-Just like for Leafs, a Spine Access Port Interface Policy Group can be reused for spine links that have the same connectivity requirements (Interface policies) and AAEP attachment.
-
-For the %%customerName ACI design, the naming convention for the Spine Access Port Interface Policy Groups will be following: ACC_SPINE_[device]_IPG.
-
-Where, device is the network device connected to the spine, such as an IPN node.
-
-The following table shows the values of one Spine Interface Policy Group that will be defined in the %%customerName design:
-
-<caption name="ACI-FABRIC-NAME - Spine Interface Policy Group">
-
-| Name | CDP | AAEP | Link-Level Policy |
-| --- | --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Spine Interface Policy Groups need to be defined in the input files:
-
-<caption name="Spine Interface Policy Group Data Model Example">
-
-```yaml
-apic:
-  access_policies:
-    spine_interface_policy_groups:
-      - name: IPG_ACP_SPINE1_IXN
-        cdp_policy: CDP_ENABLE
-        aaep: AEP_L3D_IXN
-        link_level_policy: LINK_100G_STATIC
-```
-</caption>
-
-For further information on how Spine Interface Policy Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_spine_interface_policy_group/).
-
-
-
-### Interface Profiles
-
-
-
-Interface Profiles contain blocks of ports, identified by interface selectors, and tie the selectors to interface policy groups. Before the ports defined in the interface port profile/selector are assigned to actual host-facing interfaces on a leaf, the interface port profile must be associated with a switch profile.
-
-
-
-### Leaf Interface Profile
-
-
-
-One way of creating Interface Profiles and Interface Selectors, which offers flexibility and can be easily automated, is to define one Interface Profile per Leaf switch.
-
-The interface profile will be then easily associated to the corresponding leaf switch profile. Each time a leaf node port is required, an interface selector will be created within the interface profile and the corresponding interface policy group will be associated.
-
-The interface profile will use the following naming convention: [&#39;node-ID&#39;]
-
-<caption name="ACI-FABRIC-NAME - Leaf Interface Profiles">
-
-| Interface Profile | Description |
-| --- | --- |
-</caption>
-
-The next table is an example for the Interface Selectors that can be defined in the Interface Profiles:
-
-<caption name="ACI-FABRIC-NAME - Sample Interface Selectors">
-
-| Interface Profile | Interface Selector | Port Blocks | Associated IPG |
-| --- | --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Leaf Interface Profiles need to be defined in the input files:
-
-Auto-generated profiles
-
-<caption name="Leaf Interface Profile Data Model - Auto-Generated">
-
-```yaml
-apic:
-  auto_generate_switch_pod_profiles: true
-  access_policies:
-    leaf_interface_profile_name: "LEAF\\g<id>"
-```
-</caption>
-
-Explicitly defined profiles
-
-<caption name="Leaf Interface Profile Data Model - Explicitly Defined">
-
-```yaml
-apic:
-  access_policies:
-    leaf_interface_profiles:
-      - name: LEAF1001
-        selectors:
-          - name: SEL1
-            policy_group: 10G-SERVER
-            port_blocks:
-              - name: BLOCK1
-                description: Server ABC
-                from_port: 1
-```
-</caption>
-
-For further information on how Leaf Interface Profiles are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_leaf_interface_profile/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.015">
-One Leaf Interface Profile will be created per leaf switch in a one-to-one relationship, following Cisco best practice for flexibility and automation.
-<br><br>
-Rationale: Defining one interface profile per leaf switch avoids the confusion that arises from shared profiles and ensures each switch can be independently configured. This one-to-one approach is considered best practice because it simplifies automation, prevents unintended configuration overlap, and scales cleanly as new leaf nodes are added.
-</tip>
-<br><br>
-
-
-
-
-### Spine Interface Profile
-
-
-
-Spine Interface Profiles are needed for extending VXLAN to other sites in Multi-Pod, Multi-Site or Remote Leaf solutions.
-
-One Spine Interface Profile will be created for every spine node. The Spine Interface Profile will use the following naming convention: [&#39;node-ID&#39;]
-
-The Spine interface profile will be associated to the corresponding spine switch profile. Each time a spine node port is required, an interface selector will be created within an interface profile and the corresponding interface policy group will be associated.
-
-<caption name="ACI-FABRIC-NAME - Spine Interface Profiles">
-
-| Interface Profile | Description |
-| --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Spine Interface Profiles need to be defined in the input files:
-
-Auto-generated profiles.
-
-<caption name="Spine Interface Profile Data Model - Auto-Generated">
-
-```yaml
-apic:
-  auto_generate_switch_pod_profiles: true
-  access_policies:
-    spine_interface_profile_name: "SPINE\\g<id>"
-```
-</caption>
-
-Explicitly defined profiles.
-
-<caption name="Spine Interface Profile Data Model - Explicitly Defined">
-
-```yaml
-apic:
-  access_policies:
-    spine_interface_profiles:
-      - name: SPINE101
-        selectors:
-          - name: SEL1
-            policy_group: IPN
-            port_blocks:
-              - name: BLOCK1
-                description: IPN1
-                from_port: 1
-```
-</caption>
-
-For further information on how Spine Interface Profiles are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_spine_interface_profile/).
-
-
-
-## Polices
-
-
-
-The Policies sub-chapter in Cisco ACI Interfaces configuration covers settings applied to physical and logical interfaces, including protocols like CDP, LLDP, and link speed. These policies standardize interface behavior across the fabric by managing features such as protocol enablement and link parameters through named policy groups.
-
-
-
-### Switch Policies
-
-
-
-
-
-
-
-### vPC Domain
-
-
-
-
-In the ACI fabric the vPC MCT (MultiChassis etherChannel Trunk) communication happens through the fabric. The ACI Leaf detects its vPC peer down when the vPC-peer route is withdrawn by ISIS. The vPC domain policy is applied to both vPC devices and it allows setting the "Peer Dead Interval," which by default is 200 seconds. 
-
-If all the fabric links for the leaf participating as a vPC peer go down, the vPC manager brings down all its vPCs. This action is taken to prevent dual active scenarios. When the first fabric link comes back up, the vPC manager starts the restore times. If the peer does not come up within the dead interval, it brings up all its vPCs.
-
-The vPC domain policy is applied to the vPC protection group.
-
-The %%customerName design will use the default values for the vPC domain policy.
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.016">
-The vPC domain policy will use default values, including the peer dead interval of 200 seconds.
-<br><br>
-Rationale: Cisco recommends leaving the peer dead interval at the default 200 seconds for stability. Reducing this timer without a specific high-convergence requirement risks premature vPC failovers caused by transient control-plane events, which can lead to unnecessary traffic disruption.
-</tip>
-<br><br>
-
-
-
-
-### vPC Protection Group
-
-
-
-
-The vPC Port-Channel Security Policy is responsible for creating the vPC Protection Groups. The vPC protection groups define the different pairs of switches that will form a vPC domain.
-
-Each vPC Protection Group must have a Name and an ID, called Logical Pair ID.
-
-The definition of switch pairs can be done in multiple ways (Explicit and automatic):
-
-- Explicit allows the user to define the nodes to use as vPC pair.
-- Automatic can be Consecutive pairing, every two leaves will form a vPC pair (for example 149 and 150), or it can be reciprocal pairing, every consecutive odd node and even nodes (for example 149 and 151 is one vPC pair and 150 and 152 is another vPC pair).
-
-The Logical Pair ID of the vPC protection group will be explicit and will be the last 3 digits of the Odd Node ID in the VPC pair.
-
-```text
-101
-```
-
-The Logical ID for the VPC pair of nodes 1103 and 1104:
-
-```text
-103
-```
-
-The Name of the vPC Protection Group will use this naming convention: VPC_[node-1]_[node_2]
-
-<caption name="vPC Protection Group parameters">
-
-| Parameter | Value |
-| --- | --- |
-| Protection Group Name | VPC_[node-1]_[node_2] |
-| Logical Pair ID | Value between 1 and 1000 |
-| vPC Domain Policy | Default |
-| Switch One (left switch) | Odd Switch Node ID |
-| Switch Two (right switch) | Even Switch Node ID |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how VPC Protection Groups need to be defined in the input files:
-
-<caption name="vPC Protection Group Data Model">
-
-```yaml
-apic:
-  node_policies:
-    vpc_groups:
-      mode: explicit
-      groups:
-        - id: 101
-          switch_1: 101
-          switch_2: 102
-```
-</caption>
-
-For further information on how VPC Protection Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/node_policies/vpc_group/).
-
-<note name="Note">The full list of explicit protection group definitions is provided in the Network Implementation Plan document (NIP).</note>
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.017">
-Explicit pairing will be used for vPC Protection Groups, with the Logical Pair ID derived from the odd node ID of the vPC pair.
-<br><br>
-Rationale: Cisco recommends explicit pairing over automatic pairing to ensure deterministic vPC domain assignments. Explicit pairing prevents unintended node combinations that can occur with automatic methods and provides clear, auditable switch-pair definitions that align with physical cabling.
-</tip>
-<br><br>
-
-
-
-
-### Interface Policies
-
-
-
-
-Interface policies are used to dictate fabric access interface behavior. They are categorized into types based on the category of property or protocol they are acting on.
-
-Interface policies are later referenced by an "Interface Policy Group." That Interface Policy Group is then applied to specific Interfaces and Switches.
-
-The following interface Policy Types are available:
-
-- Link Level
-- CDP Interface
-- LLDP Interface
-- Port-Channel
-- Port-Channel Member
-- Spanning-Tree Interface
-- MCP Interface
-- Storm Control
-- L2 Interface Policy
-- Port Security
-- Data Plane Policing
-- 802.1x Port Authentication
-- MACSec
-- PoE
-- Netflow
-- CoPP
-
-The following interface Policies are specific to Fibre Channel Configuration
-
-- Fibre Channel Interface
-- Priority Flow Control
-- Slow Drain
-
-The DWDM interface policy is used to tune DWDM optics to a specific DWDM port channel number.
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.018">
-A comprehensive set of interface policies will be pre-created covering the different configuration options for each policy type, with policy names that clearly describe their purpose.
-<br><br>
-Rationale: Cisco recommends creating interface policies that cover the range of expected configurations (e.g., CDP enabled/disabled, various link speeds) and using descriptive naming conventions. This pre-creation enables rapid, consistent deployment of new interfaces without ad-hoc policy creation and reduces misconfiguration risk.
-</tip>
-<br><br>
-
-
-
-
-### Link Level Policies
-
-
-
-
-The Link Level Policies dictate link level configuration such as:
-
-- Interface Speed and Auto-Negotiation.
-- Link de-bounce Time.
-- Forwarding Error Correction.
-
-In the %%customerName ACI design the following Link Level Policies will be configured in each fabric:
-
-<caption name="ACI-FABRIC-NAME - Link Level Policies">
-
-| Name | Speed | Auto Negotiation | De-bounce Interval | FEC |
-| --- | --- | --- | --- | --- |
-</caption>
-
-It is common to use specific policies without negotiation enabled if it is known what the interface link speed is. For example, 10Gig; instead of 10gigAuto.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Link Level Interface Policies need to be defined in the input files:
-
-<caption name="Link Level Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      link_level_policies:
-        - name: 10G
-          speed: 10G
-          auto: true
-          fec_mode: inherit
-```
-</caption>
-
-For further information on how Link Level Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/link_level_policy/).
-
-
-
-### CDP Policies
-
-
-
-
-The CDP interface policy is primarily used to obtain protocol addresses of neighboring devices and discover the platform of those devices. CDP can also be used to display information about the interfaces your router uses. CDP is media-and protocol-independent and runs on all Cisco-manufactured equipment including routers, bridges, access servers, and switches.
-
-The administrative state can be:
-
-- Enabled
-- Disabled
-
-The default is Disabled.
-
-The CDP Policy dictates the Access Interface configuration for the Cisco Discovery Protocol.
-
-In the %%customerName ACI design these CDP Policies will be configured in each fabric:
-
-<caption name="ACI-FABRIC-NAME - CDP Policies">
-
-| Name | Admin state |
-| --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how CDP Interface Policies need to be defined in the input files:
-
-<caption name="CDP Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      cdp_policies:
-        - name: CDP-ENABLED
-          admin_state: true
-```
-</caption>
-
-For further information on how CDP Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/cdp_policy/).
-
-
-
-### LLDP Policies
-
-
-
-
-The LLDP interface policy defines a common configuration that will apply to one or more LLDP interfaces. LLDP uses the logical link control (LLC) services to transmit and receive information to and from other LLDP agents.
-
-The following Enable and Disable options exist:
-
-- Receive State
-- Transmit State
-
-The default is Disabled.
-
-The LLDP Policy dictates the Access Interface configuration for the Link Layer Discovery Protocol.
-
-In the %%customerName ACI design these LLDP Policies will be configured in each fabric:
-
-<caption name="ACI-FABRIC-NAME - LLDP Policies">
-
-| Name | Receive state | Transmit state |
-| --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how LLDP Interface Policies need to be defined in the input files:
-
-<caption name="LLDP Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      lldp_policies:
-        - name: LLDP-ENABLED
-          admin_rx_state: true
-          admin_tx_state: true
-```
-</caption>
-
-For further information on how LLDP Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/lldp_policy/).
-
-
-
-### Port Channel Policies
-
-
-
-
-The Port Channel policy dictates the physical port bundling characteristics such as:
-
-- Mode: Static, LACP Active (Default), LACP Passive, MAC Pinning
-- LACP Control such as
-- Fast Select Hot Standby Ports
-- Graceful Convergence
-- Suspended individual
-- Port-Channel Min-Link and Max-Link
-
-In the %%customerName ACI design these Port channel policies will be configured in each fabric:
-
-<caption name="ACI-FABRIC-NAME - Port Channel Policies">
-
-| Name | Mode | Min. link | Max. link | Control |
-| --- | --- | --- | --- | --- |
-</caption>
-
-The default enabled control features with LACP are:
-
-- Fast Select Hot Standby Ports - Allow fast selection of a hot standby port when last active port in the port-channel is going down.
-- Graceful Convergence - Enables LACP graceful convergence.
-- Suspend Individual Port - Sets a port to the suspend state if it does not receive an LACP PDU from the peer port in a port channel. This can cause some servers to fail boot up, as they require LACP to locally bring up the port (only applicable to servers directly connected to a leaf node).
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Port Channel Interface Policies need to be defined in the input files:
-
-<caption name="Port Channel Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      port_channel_policies:
-        - name: LACP-ACTIVE
-          mode: active
-```
-</caption>
-
-For further information on how Port Channel Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/port_channel_policy/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.019">
-LACP Active mode will be used as the default port-channel policy, with the default control features (Fast Select Hot Standby Ports, Graceful Convergence, Suspend Individual Port) enabled unless explicitly required otherwise by connected devices.
-<br><br>
-Rationale: Cisco recommends enabling the default LACP control features to provide fast failover, graceful convergence during link transitions, and protection against miscabled single links. Suspend Individual may be disabled only for servers that require the port to be up before LACP negotiation completes, such as during PXE boot.
-</tip>
-<br><br>
-
-
-
-
-### Port Channel Member Policies
-
-
-
-
-The Port Channel Member policies dictate the LACP Transmit rate and LACP Interface Priority. The transmit rate dictates the periodicity of LACP packets. Fast send LACP packets every second, Normal every 30 seconds. The Interface Priority dictates what interfaces should be active and what should be placed in standby if not all links are necessary.
-
-In the %%customerName ACI design these Port Channel Member policies will be configured in each fabric:
-
-<caption name="ACI-FABRIC-NAME - Port Channel Member Policies">
-
-| Name | Priority | Transmit Rate |
-| --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Port Channel Member Policies need to be defined in the input files:
-
-<caption name="Port Channel Member Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      port_channel_member_policies:
-        - name: FAST
-          rate: fast
-          priority: 32768
-```
-</caption>
-
-For further information on how Port Channel Member Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/port_channel_member_policy/).
-
-
-
-### Spanning Tree Interface Policies
-
-
-
-
-The Spanning Tree Interface dictates the configuration of the BPDU Guard and BPDU Filter features on an interface.
-
-In the %%customerName ACI design these Spanning Tree policies will be configured in each fabric:
-
-<caption name="ACI-FABRIC-NAME - Spanning Tree Interface Policies">
-
-| Name | BPDU Filter | BPDU Guard |
-| --- | --- | --- |
-</caption>
-
-An ACI fabric does not participate in spanning-tree, instead STP BPDUs received on a given port/VLAN will be flooded on all other ports associated with the same End Point Group (EPG) and VLAN, even if the VLANs are associated with EPGs in different Bridge Domains. This flooding behavior allows the ACI fabric to appear as a wire to the network devices attached to the ACI fabric.
-
-If an MST region is connected to the ACI fabric, a special configuration is required for the ACI fabric to forward the MST BPDUs to other ports in the same BD.
-
-There are some considerations when connecting external L2 networks to an ACI fabric. For instance, if an STP TCN (Topology Change Notification) is received by an ACI fabric, all the End Points in the same EPG will be flushed. If, for instance, the external L2 switch has the wrong configuration for one or more server ports and the network adapters of those servers go up and down frequently, a TCN would be sent by the switch and received by the ACI fabric every time that happens, forcing the necessity to re-learn all the endpoints in that EPG. This would naturally cause disruption in the network. To prevent this, if there are no potential L2 loops in the topology, BPDU Filter could be applied on the port.
-
-The BPDU Filter approach can be taken, as long as it can be guaranteed that all the external L2 switches that will be connected to each ACI fabric will never be connected to each other via L2 and that each one of those switches will have only one single logical L2 connection to the ACI fabric (via PC or vPC). Refer to the L2 Extension section for more details.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Spanning Tree Interface Policies need to be defined in the input files:
-
-<caption name="Spanning Tree Interface Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      spanning_tree_policies:
-        - name: BPDU-FILTER
-          bpdu_filter: true
-```
-</caption>
-
-For further information on how Spanning Tree Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/spanning_tree_policy/).
-
-
-
-### Storm Control Policies
-
-
-
-
-In the %%customerName ACI design, these Storm Control policies will be initially defined:
-
-<caption name="ACI-FABRIC-NAME - Storm Control Policies">
-
-| Name | Rate type | Rate | Max. burst | Description |
-| --- | --- | --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Storm Control Interface Policies need to be defined in the input files:
-
-<caption name="Storm Control Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      storm_control_policies:
-        - name: 10P
-          alias: 10P
-          broadcast_burst_pps: unspecified
-          broadcast_pps: unspecified
-          broadcast_burst_rate: 10
-          broadcast_rate: 10
-          multicast_burst_pps: unspecified
-          multicast_pps: unspecified
-          multicast_burst_rate: 10
-          multicast_rate: 10
-          unknown_unicast_burst_pps: unspecified
-          unknown_unicast_pps: unspecified
-          unknown_unicast_burst_rate: 10
-          unknown_unicast_rate: 10
-          action: drop
-```
-</caption>
-
-For further information on how Storm Control Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/storm_control_policy/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.020">
-Storm Control policies will be pre-defined but not initially associated to any Interface Policy Groups until a traffic baseline has been established.
-<br><br>
-Rationale: Cisco recommends creating Storm Control policies upfront but deferring their application until after a baseline of normal broadcast, multicast, and unknown unicast traffic levels has been observed. Premature enforcement without a baseline risks dropping legitimate traffic and causing application outages.
-</tip>
-<br><br>
-
-
-
-
-### L2 Interface Policies
-
-
-
-
-L2 Interface Policies are used to define the scope of a VLAN on the host-facing interfaces. The available scopes are:
-
-- Global - Sets the VLAN encapsulation value to map only to a single EPG per leaf.
-- Port - Sets the Port + VLAN encapsulation combination to map to an EPG, which essentially enables the same VLAN to map to different EPGs when deployed on different ports.
-
-If Port scope is chosen, it is required to use the same VLAN ID in the same leaf on different EPGs, that:
-
-- The EPGs belong to different Bridge Domains.
-- The EPGs have different physical domains attached and those domains use different VLAN pools.
-
-In addition, the L2 Interface Policy specifies the interface QinQ characteristics:
-
-- disabled
-- corePort
-- doubleQtagPort
-- edgePort
-
-<caption name="ACI-FABRIC-NAME - L2 Interface Policies">
-
-| Name | VLAN Scope | QinQ |
-| --- | --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how L2 Interface Policies need to be defined in the input files:
-
-<caption name="L2 Interface Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      l2_policies:
-      - name: PORT-LOCAL
-        vlan_scope: portlocal
-        qinq: disabled
-```
-</caption>
-
-For further information on how L2 Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/l2_policy/).
-
-
-
-### MCP Interface
-
-
-
-
-The mis-cabling protocol (MCP) is designed to handle misconfigurations that Link Layer Discovery Protocol (LLDP) and Spanning Tree Protocol (STP) are unable to detect.
-
-MCP utilizes a Layer 2 packet and disables ports that create loops within the fabric. The untagged MCP packet is transmitted, and if the fabric detects that the packet returns, it identifies a loop and takes appropriate action. This event triggers the generation of faults and alerts.
-
-The MCP Interface Policy enables or disables the MCP state at the interface level.
-
-MCP can be enabled globally and per-interface. By default, MCP is disabled globally and is enabled on each port. For MCP to work, it must be enabled globally, regardless of the per-interface configuration. MCP must be enabled both globally and at the interface level in order to be active.
-
-In the %%customerName ACI design, per-VLAN MCP will be enabled on ports connected to server enclosures. It will not be enabled on firewalls, load balancers, routers, switches, appliances, etc.
-
-In the %%customerName design, the following MCP Interface policies will be defined:
-
-<caption name="ACI-FABRIC-NAME - MCP Interface Policies">
-
-| Name | Admin State |
-| --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how MCP Interface Policies need to be defined in the input files:
-
-<caption name="MCP Interface Data Model">
-
-```yaml
-apic:
-  access_policies:
-    interface_policies:
-      mcp_policies:
-      - name: MCP-ENABLED
-        admin_state: true
-```
-</caption>
-
-For further information on how MCP Interface Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/mcp_policy/).
-
-
-
-### MACSec Policy
-
-
-
-
-MACsec is an IEEE 802.1AE standards-based Layer 2 hop-by-hop encryption that provides data confidentiality and integrity for media access independent protocols. APIC allows users to program MACsec keys and MACsec configuration for Ethernet interfaces on the fabric on a per physical interface basis.
-
-MACsec provides MAC-layer encryption over wired networks by using out-of-band methods for encryption keying. The MACsec Key Agreement (MKA) Protocol provides the required session keys and manages the required encryption keys. Only host facing links (links between network access devices and endpoint devices such as a PC or IP phone) can be secured using MACsec.
-
-In the %%customerName design, MACsec will not be used.
-
-
-
-### Global Policies
-
-
-
-
-
-
-
-### Attached Entity Profile
-
-
-
-
-The Attachable Access Entity Profiles (AAEPs) provide the association between physical and/or virtual domains and the physical network infrastructure and/or Virtual Machine Management (VMM).
-
-AAEPs can be considered the "where" of the fabric configuration and are used to group domains with similar requirements. AAEPs are tied to interface policy groups. One or more domains are added to an AAEP. By grouping domains into AAEPs and associating them, the fabric knows where the various devices in the domain live and the APIC can push the VLANs and policy where it needs to be.
-
-The decision of how many AAEP is required depends on many factors. Typically, a reduced number of AAEP is desired for simplicity, but there are some scenarios where multiple separated AAEP are required, including but not limited to the following situations:
-
-- If the infrastructure VLAN has to be enabled on some ports, then a different AAEP is used for those particular interfaces. Extending the infra VLAN is only required for some VMM integration options beyond the virtual switch.
-- The AAEP contains relationships to the virtual switch policies, which are then pushed to the virtual switch. If there are multiple VMM domains deployed with different virtual switch policies, multiple AAEPs are created to account for the different virtual switch policy combinations.
-
-<note name="Note">In an SCVMM integration, ACI sees each Hyper-V host as a Leaf, a VTEP, therefore it needs to know the infrastructure Vlan.</note>
-
-Refer to the Domains, Pools and AAEP section previously in this chapter for more details.
-
-
-
-### QOS Class Policies
-
-
-
-
-QoS within ACI deals with classes and markings to place traffic into these classes. Each QoS class represents Class of Service and is equivalent to "qos-group" in traditional NX-OS. Each Class of Service maps to a Queue in Hardware.
-
-The Class of Service can be configured with various options, including a Scheduling Policy (Weighted Round Robin or Strict Priority, WRR being default), Min Buffer (guaranteed buffer).
-
-These classes are configured at a system level and are therefore called System Classes. At the system level, there are 6 supported classes:
-
-- A maximum of 6 "User-defined" classes.
-- 3 "Reserved" classes which are not configurable by the user. These are used for control plane traffic and SPAN traffic.
-
-The three user defined classes are:
-
-- Level 1
-- Level 2
-- Level 3 (default class enabled by default).
-
-Starting with release 4.0(1x), QoS supports levels 4, 5, and 6.
-
-The following limitations apply:
-
-- Number of classes that can be configured with Strict priority is up to 5.
-- The 3 new classes are not supported with non-EX and non-FX switches.
-- If traffic flows between non-EX or non-FX switches and EX or FX switches, the traffic will use QoS level 3.
-- For communicating with FEX for new classes, the traffic carries a Layer 2 COS value of 0.
-
-<note name="Note">In previous ACI releases, only 1 of the first 3 classes could be set as a "Strict Priority" class.</note>
-
-These QoS classes are configured for all ports in the fabric (Leaf, Spine, ASIC, and internal port). There is no per-port configuration of QoS Classes in ACI.
-
-In the %%customerName design, the user defined QoS Classes will be configured as follows:
-
-<caption name="User Defined QoS Classes - default values">
-
-| Queue | Level 1 | Level 2 | Level 3 (Default) | Level 4 | Level 5 | Level 6 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Admin State | Disabled | Disabled | Enabled | Disabled | Disabled | Disabled |
-| Priority Flow Control Admin State | false | false | false | false | false | false |
-| No-Drop-Cos | | | | | | |
-| MTU | 9216 | 9216 | 9216 | 9216 | 9216 | 9216 |
-| Minimum Buffers | 0 | 0 | 0 | 0 | 0 | 0 |
-| Congestion Algorithm | Tail Drop | Tail Drop | Tail Drop | Tail Drop | Tail Drop | Tail Drop |
-| Scheduling Algorithm | Weighted Round Robin | Weighted Round Robin | Weighted Round Robin | Weighted Round Robin | Weighted Round Robin | Weighted Round Robin |
-| Bandwidth Allocated (in %) | 20 | 20 | 20 | 0 | 0 | 0 |
-</caption>
-
-At the time of this writing, the following parameters are not configurable:
-
-- Congestion Notification (ECN): Fixed to Disabled
-- Queue Control Method: Fixed to Dynamic
-- Queue Limit: 1522 bytes.
-
-In the QoS class policy configuration there is also the option to preserve Cos Dot1p value. The 'Preserve Cos Dot1p' option is disabled by default (option unchecked).
-
-By default, the Cos Dot1p marking of the original ingress frame is not preserved. Cos Dot1p marking of frames egressing the ACI fabric is set to 0.
-
-By enabling, 'Preserve Cos Dot1p', the Cos Dot1p value of the received frame is mapped to DSCP field in the VXLAN Header. And at egress the Cos Dot1p value is mapped back from DSCP field in the VXLAN Header.
-
-The Preserve Cos Dot1p option is not compatible with configuring DSCP class-cos translation policy in Tenant Infra, because both configurations use the DSCP field in the VXLAN Header. DSCP class-cos translation policy in Tenant Infra configuration is done with Multi-Pod/Multi-Site deployment, to prioritize ACI control traffic across the IPN/ISN geographical network.
-
-In the %%customerName design, the DSCP class-cos translation policy in Tenant Infra will be used for Multi-Pod. Refer to the Multi-Pod section for more details.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how QoS Class Policies need to be defined in the input files:
-
-<caption name="QOS Class Policies Data Model">
-
-```yaml
-apic:
-  access_policies:
-    qos:
-      preserve_cos: false
-      qos_classes:
-        - level: 1
-          scheduling: strict-priority
-          congestion_algorithm: tail-drop
-        - level: 2
-          scheduling: wrr
-          bandwidth_percent: 20
-          congestion_algorithm: wred
-```
-</caption>
-
-For further information on how QoS Class Policies are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/qos/).
-
-
-
-### MCP Global Policy
-
-
-
-
-The ACI fabric does not participate in the Spanning Tree Protocol (STP). Instead, it implements the mis-cabling protocol (MCP) to detect loops.
-
-The Mis-Cabling Protocol (MCP) is a new link level loopback packet that detects an external L2 forwarding loop.
-
-- MCP frames are originated on LEAF Host Facing ports (which are enabled for MCP).
-- MCP frames are tagged with Fabric specific info (key).
-- If any leaf node detects MCP packet arriving on a port that originated from the same fabric the port is err-disabled.
-
-<note name="Note">For MCP to be effective it needs to be configured both globally and at the interface level through a specific MCP Interface policy</note>
-
-By default, MCP runs in native VLAN mode where the MCP PDUs sent are not VLAN tagged. With this setting, MCP can detect loops due to mis-cabling if the packets sent in the native VLAN are received by the fabric. However, if there was a loop in non-native EPG VLANs, then it would not be detected. Starting with release 2.1(1), the APIC supports sending MCP PDUs per VLAN.
-
-In the %%customerName design, the global MCP policy will be defined like this:
-
-<caption name="MCP Instance Policy Default">
-
-| Parameter | Value |
-| --- | --- |
-| Admin state | enabled |
-| Enable MCP BPDU per VLAN | checked |
-| Key | <intentionally omitted> |
-| Initial Delay | 180 sec |
-| Loop Detect Multiplication Factor | 3 |
-| Loop Protection Action | Port Disable |
-| Transmission Frequency | 2 sec |
-</caption>
-
-The key is a password used to uniquely identify the MCP packets within this fabric.
-
-The Initial Delay sets the time that the system has to wait before the MCP starts taking action based on the value of the Loop Protection Action. From the system boot-up until the Initial Delay times out, MCP will only create a syslog entry if a loop is detected. The range is from 0 to 1800 seconds. The default is 180 seconds.
-
-The Loop Detect Multiplication Factor is the multiplication factor that MCP uses to determine when a loop is formed. It denotes the number of continuous packets a port has to receive before claiming a loop is formed. The range is from 1 to 255. The default is 3.
-
-The Loop Protection Action determines how MCP acts when a loop is detected. MCP error-disables the port or syslog only based on this value. The default is Port Disabled.
-
-The Transmission Frequency (sec) sets the transmission frequency of the instance advertisements. The range is from 2 to 300 seconds. The default is 2 seconds.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how the Global MCP Policy needs to be defined in the input files:
-
-<caption name="MCP Global Policy Data Model">
-
-```yaml
-apic:
-  access_policies:
-    mcp:
-      action: false
-      admin_state: true
-      key: cisco
-      frequency_sec: 5
-      initial_delay: 300
-      loop_detection: 5
-      per_vlan: false
-```
-</caption>
-
-For further information on how the Global MCP Policy is defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/mcp/).
-
-
-
-### DHCP Relay
-
-
-
-
-DHCP Relay configuration in ACI is required when the DHCP server is not connected to the same subnet (broadcast domain) where the dynamic address distribution is required.
-
-For ACI to function as a DHCP Relay agent, DHCP Option 82 must be supported by the DHCP server, with the following sub options:
-
-- Agent Circuit ID
-- Agent Remote ID
-- VRF Name-VPN ID
-- Server ID Override - needed only if DHCP server and client are in different VRF.
-- Link Selection - needed only if DHCP server and client are in different VRF.
-
-DHCP addresses can only be distributed on the primary subnet configured on the Bridge Domain. DHCP relay in ACI uses the primary SVI as Gateway IP Address (GIADDR) , which is in turn used to select the DHCP scope.
-
-DHCP Relay can be configured as a Global Policy or as a Tenant Policy.
-
-In the %%customerName initial deployment, DHCP Relay will be required. Refer to the Fabric Logical Design - Bridge Domains section for more details.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how the DHCP Relay Policy needs to be defined in the input files:
-
-<caption name="DHCP Relay Data Model">
-
-```yaml
-apic:
-  tenants:
-    - name: ABC
-      policies:
-        dhcp_relay_policies:
-          - name: DHCP-RELAY1
-            description: My Description
-            providers:
-              - ip: 6.6.6.6
-                type: epg
-                tenant: ABC
-                application_profile: AP1
-                endpoint_group: EPG1
-```
-</caption>
-
-For further information on how the DHCP Relay Policy is defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/infra_dhcp_relay_policy/).
-
-
-
-### Monitoring Policies
-
-
-
-
-A named monitoring policy can be defined, or the 'default' policy can be used.
-
-Policies for Stats collection, Callhome, SNMP, Syslog, etc. are defined under Monitoring Policies. Administrators can create monitoring policies with the following four broad scopes:
-
-- Fabric Wide: includes both fabric and access objects.
-- Fabric: fabric ports, cards, chassis, fans, and so on.
-- Access (also known as infrastructure): access ports, FEX, VM controllers, and so on.
-- Tenant: EPGs, application profiles, services, and so on.
-
-In the %%customerName design, the default monitoring policies are going to be used.
-
-
-
-### Troubleshooting Policies
-
-
-
-
-
-
-
-### SPAN
-
-
-
-
-
-
-
-### SPAN Source Group
-
-
-
-
-The SPAN source group contains a group of SPAN sources. A SPAN source is where network traffic is sampled. A SPAN source can be an endpoint group (EPG), one or more ports, or port traffic filtered by an EPG (access SPAN), a Layer 2 bridge domain, or a Layer 3 context (fabric SPAN). When you create a traffic monitoring session, you must select a SPAN source group and a SPAN destination. The type of session (tenant, access, or fabric) determines the allowed types of SPAN sources and destinations. The destination can be either a port or an EPG.
-
-For SPAN source port, the port is not configured for any other purposes.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how SPAN Source Groups need to be defined in the input files:
-
-<caption name="SPAN Source Group Data Model">
-
-```yaml
-apic:
-  access_policies:
-    span:
-      source_groups:
-        - name: INT1
-          destination:
-            name: TAP1
-          sources:
-            - name: SRC1
-              direction: both
-              access_paths:
-                - node_id: 101
-                  port: 1
-```
-</caption>
-
-For further information on how SPAN Source Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_span_source_group/).
-
-
-
-### SPAN Destination Group
-
-
-
-
-The SPAN destination group contains a group of SPAN destinations. A SPAN destination is where network traffic is sent for analysis by a network analyzer. A SPAN destination can be local or remote (ERSPAN). When you create a traffic monitoring session, you must select a SPAN source and a SPAN destination. The type of session (tenant, access, or fabric) determines the allowed types of SPAN sources and destinations. The destination can be either a port or an EPG. If the destination is a port, it is not one that has been configured for other purposes. For SPAN source port, the port is not configured for any other purposes.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how SPAN Destination Groups need to be defined in the input files:
-
-<caption name="SPAN Destination Group Data Model">
-
-```yaml
-apic:
-  access_policies:
-    span:
-      destination_groups:
-        - name: TAP1
-          description: My_SPAN_Destination
-          node_id: 101
-          port: 10
-```
-</caption>
-
-For further information on how SPAN Destination Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_span_destination_group/).
-
-In the %%customerName design, no SPAN sessions, source, or destination groups will be defined at an initial stage.
-
-
-
-## Switches
-
-
-
-A Switch Profile can be seen as a container for switch selectors. Switch selectors are used to select node ID ranges and to associate them with a switch policy-group.
-
-Switch Profiles are also used to associate node ID ranges with interface profiles to define the behavior of its respective switch ports, and, if required, with module profiles (used for configuring FEX modules). A switch profile could be the definition of a single switch, or it could be the definition of multiple switches that use the same policy and use the same interfaces.
-
-Distinct Switch profiles are created for Leaf Switches and Spine Switches.
-
-
-<caption name="Switch Profile Objects Relationship">
-
-![image](/api/v1/projects/df55fc75-d510-4f14-b791-381a93756c73/images/Switch_Profile_Objects_Relationship.png?tech_path=docascode%2Ftech-aci-v1.0.2&branch=main)
-</caption>
-
-
-
-
-### Switch Policy Groups
-
-
-
-Switch Policy Groups are templates for grouping the defined switch policies. A Switch Policy Group can be associated to the Leaf or Spine Switch Profile.
-
-Spine Switch Policies for the fabric are summarized in table below.
-
-<caption name="ACI-FABRIC-NAME - Switch Policy Group">
-
-| Switch Policy Name | LLDP Policy | BFD ipv4 Policy | BFD ipv6 Policy |
-| --- | --- |
-</caption>
-
-Leaf Switch Profiles are summarized in the table below.
-
-<caption name="ACI-FABRIC-NAME - Switch Policy Group">
-
-| Switch Policy Name | Forwardin Policy | BFD ipv4 Policy | BFD ipv6 Policy |
-| --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Leaf Switch Policy Groups need to be defined in the input files:
-
-<caption name="Leaf Switch Policy Group Data Model">
-
-```yaml
-apic:
-  access_policies:
-    leaf_switch_policy_groups:
-      - name: ALL_LEAFS
-        forwarding_scale_policy: HIGH-DUAL-STACK
-        bfd_ipv4_policy: BFD-IPV4-POLICY
-        bfd_ipv6_policy: BFD-IPV6-POLICY
-```
-</caption>
-
-Below example of Spine Policy Group definition.
-
-<caption name="Spine Switch Policy Group Data Model">
-
-```yaml
-apic:
-  access_policies:
-    spine_switch_policy_groups:
-      - name: ALL_SPINES
-        lldp_policy: LLDP-ENABLED
-        bfd_ipv4_policy: BFD-IPV4-POLICY
-        bfd_ipv6_policy: BFD-IPV6-POLICY
-```
-</caption>
-
-For further information on how Leaf Switch Policy Groups are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_leaf_switch_policy_group/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.021">
-An explicit Switch Policy Group will be configured and associated to all leaf and spine switches, even when all default policy profiles are used.
-<br><br>
-Rationale: Cisco recommends configuring explicit switch policy groups rather than relying on implicit defaults. This ensures that the intended policy set is clearly defined and traceable, prevents unexpected behaviour if defaults change after a software upgrade, and provides a single point of modification for future policy adjustments.
-</tip>
-<br><br>
-
-
-
-
-### Leaf Switch Profiles
-
-
-
-It was common practice to define one switch profile for each leaf switch and an additional switch profile for each vPC domain pair of leaf switches. However, it has been noticed in the field that this can easily lead into confusion that ends up in unenforced configuration standardization.
-
-In the %%customerName ACI design, the 1 to 1 approach will be taken with both Interface Profiles and Switch Profiles: one Switch Profile will be defined for each Interface Profile, i.e., Switch Profiles will be created for all switches in a 1 to 1 relationship.
-
-One Leaf Switch profile will be created per Leaf switch (regular, service, and Border leaf).
-
-
-For the %%customerName ACI design, the Leaf Switch Profiles will use the following naming convention: [&#39;node-ID&#39;]
-
-<caption name="ACI-FABRIC-NAME - Leaf Switch Profiles">
-
-| Switch Profile | Node IDs | Pod |
-| --- | --- | --- |
-</caption>
-
-The association of Leaf Switch Profile with Leaf Interface Profile for all the leaf nodes in the %%customerName ACI fabrics follows this sample:
-
-<caption name="ACI-FABRIC-NAME - Sample Leaf Switch Profile with Interface Profile association">
-
-| Switch Profile | Interface Profile |
-| --- | --- |
-</caption>
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Leaf Switch Profiles need to be defined in the input files:
-
-Auto-generated profiles.
-
-<caption name="Leaf Switch Profiles Data Model - Auto-Generated">
-
-```yaml
-apic:
-  auto_generate_switch_pod_profiles: true
-  access_policies:
-    leaf_switch_profile_name: "LEAF\\g<id>"
-    leaf_switch_selector_name: "LEAF\\g<id>"
-```
-</caption>
-
-Explicitly defined profiles.
-
-<caption name="Leaf Switch Profiles Data Model - Explicitly Defined">
-
-```yaml
-apic:
-  access_policies:
-    leaf_switch_profiles:
-      - name: LEAF1001
-        selectors:
-          - name: SEL1
-            policy: ALL_LEAFS
-            node_blocks:
-              - name: BLOCK1
-                from: 1001
-        interface_profiles:
-          - LEAF1001
-```
-</caption>
-
-For further information on how Leaf Switch Profiles are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_leaf_switch_profile/).
-
-The following design decisions have been made in this section:
-
-<tip name="Design Decision DD.022">
-One Leaf Switch Profile will be created per leaf switch in a one-to-one relationship, each associated with a single corresponding Interface Profile.
-<br><br>
-Rationale: Cisco now recommends a one-to-one relationship between switch profiles and switches, replacing the older practice of creating separate profiles for individual switches and vPC pairs. This approach prevents configuration standardisation drift that has been observed in the field and simplifies both manual and automated provisioning.
-</tip>
-<br><br>
-
-
-
-
-### Spine Switch Profiles
-
-
-
-One Spine Switch Profile will be created per Spine switch. The Spine Switch Profile will use the following naming convention: [&#39;node-ID&#39;]
-
-The spine switch profile will be associated with the corresponding spine interface profile.
-
-The IaC data model for ACI formally defines the format of the data input files. This is an example of how Spine Switch Profiles need to be defined in the input files:
-
-Auto-generated profiles.
-
-<caption name="Spine Switch Profiles Data Model - Auto-Generated">
-
-```yaml
-apic:
-  auto_generate_switch_pod_profiles: true
-  access_policies:
-    spine_switch_profile_name: "SPINE\\g<id>"
-    spine_switch_selector_name: "SPINE\\g<id>"
-```
-</caption>
-
-Explicitly defined profiles.
-
-<caption name="Spine Switch Profiles Data Model - Explicitly Defined">
-
-```yaml
-apic:
-  access_policies:
-    spine_switch_profiles:
-      - name: SPINE101
-        selectors:
-          - name: SEL1
-            policy: ALL_SPINE
-            node_blocks:
-              - name: BLOCK1
-                from: 101
-        interface_profiles:
-          - SPINE101
-```
-</caption>
-
-For further information on how Spine Switch Profiles are defined in the IaC Data Model for ACI, please refer to the [Network-as-Code (NaC) documentation](https://netascode.cisco.com/docs/data_models/apic/access_policies/ap_spine_switch_profile/).
 
 
 

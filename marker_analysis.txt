@@ -1,0 +1,25 @@
+Total markers: 8
+
+Marker Analysis:
+============================================================
+1. Position 6819 - Ref: 7cca0601-cfae-4c39-a728-a3ef5e106c8d
+2. Position 6920 - Ref: c7d28c52-dc75-499f-8eb7-21fb4001ca49
+   Gap from previous: 29 chars
+3. Position 7021 - Ref: 50ab19dd-49bc-4a49-9feb-25ef7a5e3f39
+   Gap from previous: 29 chars
+4. Position 7122 - Ref: 886c794e-dbb8-4d74-85bd-0b0cf7892841
+   Gap from previous: 29 chars
+5. Position 7223 - Ref: 322e9bcb-3c40-4d93-9aa8-748343967f4a
+   Gap from previous: 29 chars
+6. Position 7324 - Ref: 68592e16-2f38-4b48-98f1-48e72f568e62
+   Gap from previous: 29 chars
+7. Position 7425 - Ref: 57427d01-1a6a-4119-b7e6-9e5f8b263595
+   Gap from previous: 29 chars
+8. Position 64420 - Ref: e11068a6-ba06-4710-b325-fcfeb2dac79a
+   Gap from previous: 56923 chars
+
+
+First marker is at position: 6819
+
+Context around first marker (200 chars before):
+et"><ac:structured-macro ac:name="anchor" ac:schema-version="1" ac:macro-id="ab9f8a7e-983d-4122-a8f4-4fa9413461bf"><ac:parameter ac:name="">docautomation_start</ac:parameter></ac:structured-macro></p><ac:inline-comment-marker ac:ref="7cca0601-cfae-4c39-a728-a3ef5e106c8d"> </ac:inline-comment-marker

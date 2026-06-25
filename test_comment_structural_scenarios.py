@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 
 from comment_preserve_publish import _inject_inline_markers
 
@@ -23,6 +23,92 @@ def _marker(old_storage: str, anchor: str, ref: str, occurrence: int = 1) -> dic
 
 
 class CommentStructuralScenarioTests(unittest.TestCase):
+    def test_s41_split_section_into_multiple_headings_routes_comment_to_top_orphan_space(self):
+        old_storage = (
+            '<h1>Design</h1>'
+            '<h2>Operations</h2>'
+            '<p>Unique section guidance remains here.</p>'
+        )
+        new_storage = (
+            '<h1>Design</h1>'
+            '<h2>Runbook Preparation</h2>'
+            '<p>Preparation details changed heavily.</p>'
+            '<h2>Runbook Execution</h2>'
+            '<p>Execution details changed heavily.</p>'
+        )
+        marker = _marker(old_storage, 'Unique section guidance remains here.', 'ref-s41-split')
+        marker['heading_path'] = [
+            {'level': 1, 'text': 'Design', 'normalized_text': 'design'},
+            {'level': 2, 'text': 'Operations', 'normalized_text': 'operations'},
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 1)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-s41-split">\u00a0</ac:inline-comment-marker>'))
+
+    def test_s42_merge_multiple_headings_routes_comment_to_top_orphan_space(self):
+        old_storage = (
+            '<h1>Design</h1>'
+            '<h2>Fabric Access</h2>'
+            '<p>Access block details before merge.</p>'
+            '<h2>Fabric Core</h2>'
+            '<p>Core block details before merge.</p>'
+        )
+        new_storage = (
+            '<h1>Design</h1>'
+            '<h2>Fabric Unified</h2>'
+            '<p>Unified content rewritten and old text removed.</p>'
+        )
+        marker = _marker(old_storage, 'Core block details before merge.', 'ref-s42-merge')
+        marker['heading_path'] = [
+            {'level': 1, 'text': 'Design', 'normalized_text': 'design'},
+            {'level': 2, 'text': 'Fabric Core', 'normalized_text': 'fabric core'},
+        ]
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 1)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-s42-merge">\u00a0</ac:inline-comment-marker>'))
+
+    def test_s45_evidence_loss_routes_comment_to_top_orphan_space(self):
+        new_storage = '<h1>Design</h1><p>Completely rewritten content with no recoverable clues.</p>'
+        marker = {
+            'ref': 'ref-s45-loss',
+            'anchor_html': '\u00a0',
+            'left_context': '',
+            'right_context': '',
+            'start': 0,
+            'end': 0,
+            'heading_path': [],
+        }
+
+        updated, reanchored, skipped, deleted_icons = _inject_inline_markers(
+            new_storage,
+            [marker],
+            open_ref_ids=set(),
+            section_span=(0, len(new_storage)),
+        )
+
+        self.assertEqual(reanchored, 1)
+        self.assertEqual(skipped, 0)
+        self.assertEqual(deleted_icons, 1)
+        self.assertTrue(updated.startswith('<ac:inline-comment-marker ac:ref="ref-s45-loss">\u00a0</ac:inline-comment-marker>'))
+
     def test_bullet_item_replacement_stays_on_rewritten_item(self):
         old_storage = "<ul><li>Alpha old bullet.</li><li>Neighbor bullet.</li></ul>"
         new_storage = "<ul><li>Alpha new bullet.</li><li>Neighbor bullet.</li></ul>"

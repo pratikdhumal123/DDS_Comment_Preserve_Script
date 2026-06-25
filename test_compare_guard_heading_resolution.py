@@ -172,14 +172,23 @@ class CompareGuardHeadingResolutionTests(unittest.TestCase):
 
         self.assertEqual(resolved, _ANCHOR_REGION_AUTO_SENTINEL)
 
-    def test_auto_publish_target_prefers_single_concrete_heading_even_when_anchor_region_available(self):
+    def test_auto_publish_target_prefers_anchor_region_when_available_even_if_fallback_enabled(self):
+        resolved = _select_auto_publish_target(
+            ["Introduction"],
+            allow_full_page_fallback=True,
+            anchor_region_available=True,
+        )
+
+        self.assertEqual(resolved, _ANCHOR_REGION_AUTO_SENTINEL)
+
+    def test_auto_publish_target_prefers_anchor_region_over_single_heading_when_available(self):
         resolved = _select_auto_publish_target(
             ["replaced content > Access Polices"],
             allow_full_page_fallback=False,
             anchor_region_available=True,
         )
 
-        self.assertEqual(resolved, "replaced content > Access Polices")
+        self.assertEqual(resolved, _ANCHOR_REGION_AUTO_SENTINEL)
 
     def test_auto_heading_baseline_reuses_equivalent_copied_markdown_file(self):
         original_markdown = "# Introduction\nSame text.\n\n# Access Polices\nOriginal body.\n"

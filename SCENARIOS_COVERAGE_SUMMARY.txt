@@ -1,0 +1,215 @@
+================================================================================
+  DDS Comment Preserve Solution — Scenario Coverage Summary
+================================================================================
+Project: DDS_Comment_Preserve_Script
+GitHub:  https://github.com/pratikdhumal123/DDS_Comment_Preserve_Script
+Date:    2026-06-22
+================================================================================
+
+OVERVIEW
+--------
+This project preserves Confluence inline comments when markdown content is
+published to a SCDP/Confluence page. It captures comment markers before
+overwrite, re-anchors them after publish, and produces a preservation audit
+report with risk classification.
+
+Total scenarios: 47
+     - Fully Covered (regression-proven): 40
+  - Partially Covered (manual review recommended): 6
+     - Not Covered / By Design: 1
+
+================================================================================
+SECTION 1 — FULLY COVERED SCENARIOS
+================================================================================
+
+--- Exact Text & Local Rewrites ---
+S01  Exact text unchanged in same section
+     → Exact preserve | test_comment_scenarios.py
+
+S02  Single word replaced in same sentence
+     → Edited-text preserve | test_comment_scenarios.py, test_comment_report.py
+
+S03  Whole sentence rewritten in same paragraph
+     → Edited-text preserve | test_comment_scenarios.py
+
+S04  Repeated anchor text in same section
+     → Exact preserve | test_comment_scenarios.py
+
+S05  Prior marker insertions shift later preferred positions
+     → Exact preserve | test_comment_scenarios.py
+
+S06  Repeated surrounding context across sections
+     → Edited-text preserve | test_comment_scenarios.py
+
+--- Deleted Content ---
+S07  Deleted body text under surviving heading
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S08  Deleted body text under nested subheading
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S09  Multiple deleted comments on same deleted block
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S10  Previously re-anchored deleted comments survive next overwrite
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S11  Exact text exists elsewhere but original context is weak
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S12  Single deleted word could drift to unrelated surviving word
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+--- Heading Changes ---
+S13  Same heading name exists in multiple sections
+     → Local fallback preserve | test_comment_reanchor.py
+
+S28  Heading renamed but body mostly stable
+     → Exact/Local fallback preserve | test_comment_reanchor.py,
+       test_compare_guard_heading_resolution.py
+
+S29  Comment attached directly to heading text
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S46  Deleted nested heading with surviving ancestor
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S47  Deleted main heading with surviving upper heading
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S48  Deleted heading path missing entirely in current scope
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+--- Auto-Targeting ---
+S20  Auto-targeting single changed heading
+     → Exact preserve | test_compare_guard_heading_resolution.py
+
+S21  Auto-targeting multiple changed headings in order
+     → Exact preserve | test_compare_guard_heading_resolution.py
+
+S22  Same logical markdown from copied file path
+     → Exact preserve | test_compare_guard_heading_resolution.py
+
+--- Context & Recovery ---
+S14  Strong context: content moved and should be followed
+     → Edited-text preserve | test_comment_reanchor.py
+
+S15  Weak context: safer to pin locally than drift
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S16  Anchor inside unsafe HTML tag boundary (link href)
+     → Recoverable heading preserve | test_comment_reanchor.py
+
+S17  Marker missing from storage, recoverable from inline properties
+     → Local fallback preserve | test_comment_reanchor.py
+
+S18  Marker recoverable from historical compare artifacts
+     → Local fallback preserve | test_comment_reanchor.py
+
+S19  Preserved / missing / reanchored comment reporting
+     → Audit-only | test_comment_report.py
+
+--- Structural Transforms ---
+S24  Commented paragraph split into multiple new paragraphs
+     → Edited-text preserve | test_comment_structural_scenarios.py
+
+S25  Multiple old paragraphs merged into one new paragraph
+     → Edited-text preserve | test_comment_structural_scenarios.py
+
+S26  Commented text moved within same section and rewritten
+     → Edited-text preserve | test_comment_reanchor.py
+
+S27  Commented text moved to another heading and rewritten
+     → Edited-text/Recoverable heading preserve
+       | test_comment_structural_scenarios.py
+
+S30  Large section with many duplicate boilerplate phrases
+     → Local fallback preserve | test_comment_structural_scenarios.py,
+       test_comment_scale_scenarios.py
+
+S31  Bullet list item edited in place
+     → Edited-text preserve | test_comment_structural_scenarios.py
+
+S32  Bullet list item reordered within list
+     → Local fallback/Edited-text preserve
+       | test_comment_structural_scenarios.py
+
+S33  Numbered or bullet list item split or merged
+     → Edited-text preserve or Audit-only
+       | test_comment_structural_scenarios.py
+
+S34  Table cell text edited in place
+     → Edited-text preserve | test_comment_structural_scenarios.py
+
+S35  Table row deleted
+     → Recoverable heading preserve or Audit-only
+       | test_comment_structural_scenarios.py
+
+S36  Table rows reordered
+     → Audit-only or strong local fallback
+       | test_comment_structural_scenarios.py
+
+S38  Content inside Confluence macro rewritten
+     → Audit-only or Edited-text preserve
+       | test_comment_structural_scenarios.py
+
+S41  Entire section split into several headings
+           → Orphan-at-top preserve (safe empty anchor)
+                | test_comment_structural_scenarios.py
+
+S42  Several headings merged into one heading
+           → Orphan-at-top preserve (safe empty anchor)
+                | test_comment_structural_scenarios.py
+
+================================================================================
+SECTION 2 — PARTIALLY COVERED (manual review / audit recommended)
+================================================================================
+
+S23  Comment anchor spans bold/italic/link/code fragments
+     → Multi-tag visible-phrase recovery exists; broader formatting incomplete
+
+S37  Table converted to paragraph/list or reverse
+     → Works when row identity survives strongly; broader transforms not modeled
+
+S39  Content inside info/expand/panel/tab macro moved
+     → Simple relocation with strong visible text covered; deep move incomplete
+
+S40  Content reordered across multiple headings in one publish
+     → Covered in synthetic form; broad multi-section movement not deep-proven
+
+S43  Very large document with dozens of comments and repeated patterns
+     → Stress harness exists (1200 markers, 100% visible rate validated);
+       full production-scale end-to-end not fully validated
+
+S44  Concurrent live page edits during overwrite and reinjection
+     → Version-conflict fail-closed (409) coverage exists;
+       full concurrent choreography is operationally risky
+
+================================================================================
+SECTION 3 — NOT COVERED / BY DESIGN
+================================================================================
+
+S45  Marker removed, history unavailable, context destroyed
+     → True evidence-loss boundary — by design, cannot recover
+
+================================================================================
+OUTCOME CLASSES LEGEND
+================================================================================
+Exact preserve           — Comment stays on the same logical anchor text
+Edited-text preserve     — Comment moves to the rewritten local replacement
+Local fallback preserve  — Comment preserved near original using safe nearby anchor
+Recoverable heading      — Comment preserved on nearest heading or section anchor
+preserve                   when direct text anchoring is no longer safe
+Audit-only               — Cannot safely re-attach; reported for manual review
+
+================================================================================
+STRICT FLAGS (for production use)
+================================================================================
+--require-visible-inline-markers   Fail (exit 2) if any active comment becomes
+                                   invisible after publish
+--require-low-risk-reanchor        Fail (exit 3) if risk assessment marks the
+                                   run as requiring manual review
+
+================================================================================
+END OF DOCUMENT
+================================================================================

@@ -8,6 +8,7 @@ import os
 # Your Confluence instance base URL
 BASE_URL = "https://scdp.cisco.com/conf"
 
+
 # Authentication mode:
 #   "auto"   -> try Cookie, Bearer token, then Basic auth
 #   "cookie" -> use SESSION_COOKIE only

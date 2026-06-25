@@ -30,6 +30,7 @@ _FULL_PAGE_AUTO_SENTINEL = "__AUTO_FULL_PAGE__"
 _ANCHOR_REGION_AUTO_SENTINEL = "__AUTO_ANCHOR_REGION__"
 _PAGE_STORAGE_UPDATE_TIMEOUT_SECONDS = 300
 _HEADING_PATH_SEPARATOR = " > "
+_ORPHAN_CONTEXT_DISPLAY_SEPARATOR = " -> "
 _DEFAULT_MANAGED_ANCHOR_START = "docautomation_start"
 _DEFAULT_MANAGED_ANCHOR_END = "docautomation_end"
 _INLINE_PROPERTIES_PAGE_SIZE = 500
@@ -751,7 +752,8 @@ def _fetch_publish_marker_with_auth(
 
 def _extract_inline_markers(storage_html: str) -> List[Dict[str, Any]]:
     """Return list of inline comment markers found in storage HTML.
-    Each entry: {ref, anchor_html, full_tag}"""
+    Each entry: {ref, anchor_html, full_tag, force_orphan (if orphaned)}
+    force_orphan is set when anchor_html contains only whitespace/non-breaking-space."""
     markers: List[Dict[str, Any]] = []
     if not storage_html:
         return markers
@@ -780,17 +782,23 @@ def _extract_inline_markers(storage_html: str) -> List[Dict[str, Any]]:
 
             left_context = storage_html[max(0, start - _CONTEXT_WINDOW):start]
             right_context = storage_html[end:min(len(storage_html), end + _CONTEXT_WINDOW)]
-            markers.append(
-                {
-                    "ref": str(opened["ref"]),
-                    "anchor_html": storage_html[open_end:token.start()],
-                    "full_tag": storage_html[start:end],
-                    "left_context": left_context,
-                    "right_context": right_context,
-                    "start": start,
-                    "end": end,
-                }
-            )
+            anchor_html = storage_html[open_end:token.start()]
+            
+            # Mark as orphan if anchor contains only whitespace or non-breaking space
+            is_orphan = not _marker_visible_anchor_text(anchor_html)
+            
+            marker_entry = {
+                "ref": str(opened["ref"]),
+                "anchor_html": anchor_html,
+                "full_tag": storage_html[start:end],
+                "left_context": left_context,
+                "right_context": right_context,
+                "start": start,
+                "end": end,
+            }
+            if is_orphan:
+                marker_entry["force_orphan"] = True
+            markers.append(marker_entry)
             continue
 
         stack.append(
@@ -1554,12 +1562,20 @@ def _select_auto_publish_target(
     anchor_region_available: bool,
 ) -> str:
     concrete_titles = [title for title in changed_titles if str(title or "").strip() and title != _FULL_PAGE_AUTO_SENTINEL]
-    if len(concrete_titles) == 1:
-        # Keep section-local publish when a single changed heading is known,
-        # even if managed anchor boundaries are present on the page.
-        return concrete_titles[0]
     if anchor_region_available:
         return _ANCHOR_REGION_AUTO_SENTINEL
+    if _FULL_PAGE_AUTO_SENTINEL in changed_titles:
+        raise SystemExit(
+            "Auto heading resolution requires managed anchor-region mode for this document, "
+            "but the start/end anchors were not found on the live page. "
+            "Publish is blocked to avoid full-page overwrite."
+        )
+    if len(concrete_titles) == 1:
+        return concrete_titles[0]
+    # Treat multi-section updates as one integrated document publish.
+    # This ensures intro + other heading changes are applied together.
+    if len(concrete_titles) > 1:
+        return _select_auto_heading_target(changed_titles, allow_full_page_fallback)
     return _select_auto_heading_target(changed_titles, allow_full_page_fallback)
 
 
@@ -2728,6 +2744,271 @@ def _preview_text(value: str, limit: int = 80) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
+def _format_heading_path_for_display(
+    heading_path: Optional[List[Dict[str, Any]]],
+    fallback_heading_title: str = "",
+) -> str:
+    parts: List[str] = []
+    for item in heading_path or []:
+        text = _html_to_plain_text(str((item or {}).get("text") or "")).strip()
+        if text and (not parts or parts[-1] != text):
+            parts.append(text)
+
+    if not parts and fallback_heading_title:
+        for raw_part in _split_heading_path(fallback_heading_title):
+            text = _html_to_plain_text(str(raw_part or "")).strip()
+            if text and (not parts or parts[-1] != text):
+                parts.append(text)
+
+    return _ORPHAN_CONTEXT_DISPLAY_SEPARATOR.join(parts)
+
+
+def _build_orphan_context_reply_storage(heading_path_text: str, anchor_preview: str = "") -> str:
+    escaped_heading_path = html.escape(str(heading_path_text or "").strip())
+    escaped_anchor_preview = html.escape(str(anchor_preview or "").strip())
+    body_parts = [
+        "<p><strong>Original location:</strong> " + escaped_heading_path + "</p>",
+    ]
+    if escaped_anchor_preview:
+        body_parts.append("<p><strong>Original commented text:</strong> " + escaped_anchor_preview + "</p>")
+    body_parts.append(
+        "<p><em>This comment was preserved as an orphan because the original page content changed or was removed.</em></p>"
+    )
+    return "".join(body_parts)
+
+
+def _build_orphan_context_targets(
+    storage_anchor_audit: Dict[str, Any],
+    inline_props: List[Dict[str, str]],
+    markers: List[Dict[str, Any]],
+    fallback_heading_title: str,
+) -> List[Dict[str, str]]:
+    props_by_ref = {
+        str(item.get("ref") or ""): item
+        for item in inline_props
+        if str(item.get("ref") or "") and str(item.get("comment_id") or "")
+    }
+    markers_by_ref = {
+        str(marker.get("ref") or ""): marker
+        for marker in markers
+        if str(marker.get("ref") or "")
+    }
+
+    targets: List[Dict[str, str]] = []
+    seen_comment_ids: set = set()
+    for detail in storage_anchor_audit.get("details", []):
+        ref = str(detail.get("ref") or "")
+        if not ref:
+            continue
+        if not bool(detail.get("visible_after_publish")):
+            continue
+        if str(detail.get("after_anchor_text_preview") or "").strip():
+            continue
+
+        inline_prop = props_by_ref.get(ref) or {}
+        comment_id = str(inline_prop.get("comment_id") or "").strip()
+        if not comment_id or comment_id in seen_comment_ids:
+            continue
+
+        marker = markers_by_ref.get(ref) or {}
+        heading_path_text = _format_heading_path_for_display(
+            marker.get("heading_path") or [],
+            fallback_heading_title=fallback_heading_title,
+        )
+        if not heading_path_text:
+            continue
+
+        anchor_preview = _preview_text(
+            str(marker.get("inline_anchor_html") or marker.get("anchor_html") or inline_prop.get("anchor_html") or ""),
+            limit=120,
+        )
+        targets.append(
+            {
+                "comment_id": comment_id,
+                "ref": ref,
+                "heading_path_text": heading_path_text,
+                "anchor_preview": anchor_preview,
+                "reply_storage": _build_orphan_context_reply_storage(heading_path_text, anchor_preview),
+            }
+        )
+        seen_comment_ids.add(comment_id)
+
+    return targets
+
+
+def _fetch_comment_replies(
+    base_url: str,
+    comment_id: str,
+    auth: Optional[Tuple[str, str]],
+    headers: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    url = f"{base_url.rstrip('/')}/rest/api/content/{comment_id}/child/comment"
+    resp = requests.get(
+        url,
+        params={"expand": "body.storage", "depth": "all"},
+        auth=auth,
+        headers=headers,
+        timeout=60,
+    )
+    # Some Confluence instances reject or error on nested reply listing endpoints.
+    # Fail open here so duplicate-check does not block reply posting.
+    if resp.status_code < 200 or resp.status_code >= 300:
+        return []
+    resp.raise_for_status()
+    payload = resp.json() or {}
+    return payload.get("results") or []
+
+
+def _reply_already_contains_orphan_context(existing_replies: List[Dict[str, Any]], reply_storage: str) -> bool:
+    wanted_plain = _html_to_plain_text(reply_storage)
+    if not wanted_plain:
+        return False
+
+    for reply in existing_replies:
+        reply_storage_html = (((reply.get("body") or {}).get("storage") or {}).get("value") or "")
+        reply_plain = _html_to_plain_text(reply_storage_html)
+        if reply_plain == wanted_plain:
+            return True
+    return False
+
+
+def _post_comment_reply(
+    base_url: str,
+    comment_id: str,
+    reply_storage: str,
+    auth: Optional[Tuple[str, str]],
+    headers: Dict[str, str],
+) -> Dict[str, Any]:
+    post_headers = {k: v for k, v in headers.items()}
+    post_headers["Content-Type"] = "application/json"
+    payload = {
+        "type": "comment",
+        "container": {"id": str(comment_id), "type": "comment"},
+        "body": {"storage": {"value": reply_storage, "representation": "storage"}},
+    }
+    attempts = [
+        (
+            f"{base_url.rstrip('/')}/rest/api/content",
+            payload,
+        ),
+        (
+            f"{base_url.rstrip('/')}/rest/api/content/{comment_id}/child/comment",
+            {"type": "comment", "body": {"storage": {"value": reply_storage, "representation": "storage"}}},
+        ),
+    ]
+
+    last_result: Dict[str, Any] = {"ok": False, "status": "not-attempted"}
+    for url, body in attempts:
+        resp = requests.post(url, json=body, auth=auth, headers=post_headers, timeout=60)
+        if resp.status_code in (200, 201):
+            return {"ok": True, "status": "ok", "http_status": int(resp.status_code), "url": url}
+        last_result = {
+            "ok": False,
+            "status": "http-error",
+            "http_status": int(resp.status_code),
+            "url": url,
+            "response_preview": str(resp.text or "")[:500],
+        }
+    return last_result
+
+
+def _post_orphan_context_replies(
+    args: argparse.Namespace,
+    config_module: Any,
+    targets: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "enabled": bool(getattr(args, "orphan_context_reply", False)),
+        "candidate_count": len(targets),
+        "posted_count": 0,
+        "skipped_existing_count": 0,
+        "failed_count": 0,
+        "details": [],
+    }
+    if not getattr(args, "orphan_context_reply", False):
+        summary["status"] = "disabled"
+        return summary
+    if not args.apply:
+        summary["status"] = "skipped-no-apply"
+        return summary
+    if not targets:
+        summary["status"] = "no-orphan-targets"
+        return summary
+    
+    # Note: This feature requires Confluence authentication with permission to create child comments.
+    # If using Bearer token auth, the service may not allow child comment creation (Confluence permission model).
+    # Some Confluence instances require Basic Auth with a service account for this feature to work.
+    # If all replies fail with 401, this is likely a permission/auth scope issue, not a code bug.
+
+    last_error: Optional[str] = None
+    for auth, headers, auth_name in _auth_strategies(args, config_module):
+        try:
+            posted_count = 0
+            skipped_existing_count = 0
+            failed_count = 0
+            details: List[Dict[str, Any]] = []
+            for target in targets:
+                comment_id = str(target.get("comment_id") or "")
+                reply_storage = str(target.get("reply_storage") or "")
+                if not comment_id or not reply_storage:
+                    continue
+
+                existing_replies = _fetch_comment_replies(args.base_url, comment_id, auth, headers)
+                if _reply_already_contains_orphan_context(existing_replies, reply_storage):
+                    skipped_existing_count += 1
+                    details.append(
+                        {
+                            "comment_id": comment_id,
+                            "ref": str(target.get("ref") or ""),
+                            "status": "already-present",
+                            "heading_path_text": str(target.get("heading_path_text") or ""),
+                        }
+                    )
+                    continue
+
+                post_result = _post_comment_reply(args.base_url, comment_id, reply_storage, auth, headers)
+                if bool(post_result.get("ok")):
+                    posted_count += 1
+                    details.append(
+                        {
+                            "comment_id": comment_id,
+                            "ref": str(target.get("ref") or ""),
+                            "status": "posted",
+                            "heading_path_text": str(target.get("heading_path_text") or ""),
+                        }
+                    )
+                else:
+                    failed_count += 1
+                    details.append(
+                        {
+                            "comment_id": comment_id,
+                            "ref": str(target.get("ref") or ""),
+                            "status": "failed",
+                            "heading_path_text": str(target.get("heading_path_text") or ""),
+                            "error": str(post_result.get("response_preview") or post_result.get("status") or ""),
+                        }
+                    )
+
+            summary.update(
+                {
+                    "status": "ok",
+                    "auth_method": auth_name,
+                    "posted_count": posted_count,
+                    "skipped_existing_count": skipped_existing_count,
+                    "failed_count": failed_count,
+                    "details": details,
+                }
+            )
+            return summary
+        except Exception as exc:
+            last_error = str(exc)
+
+    summary["status"] = "error"
+    summary["error"] = last_error or "unknown error"
+    summary["failed_count"] = len(targets)
+    return summary
+
+
 def _build_comment_marker_map(
     comments: List[Dict[str, Any]],
     inline_props: List[Dict[str, str]],
@@ -3219,10 +3500,72 @@ def _inject_inline_markers(
     reanchored = 0
     skipped = 0
     deleted_anchor_icon_count = 0
+    orphan_refs_to_batch: List[str] = []  # Collect all orphan refs for batch injection at end
+    orphan_refs_with_deleted_icon: set = set()
+    markers_by_ref: Dict[str, Dict[str, Any]] = {
+        str(m.get("ref") or ""): m
+        for m in markers
+        if str(m.get("ref") or "")
+    }
     old_scope_start = 0
     accumulated_injection_delta = 0
     if section_span is not None:
         old_scope_start = int(section_span[0])
+
+    def _heading_path_key(path: Optional[List[Dict[str, Any]]]) -> Tuple[Tuple[int, str], ...]:
+        if not path:
+            return tuple()
+        key_parts: List[Tuple[int, str]] = []
+        for item in path:
+            level = int(item.get("level") or 0)
+            normalized_text = str(item.get("normalized_text") or item.get("text") or "").strip().lower()
+            if level > 0 and normalized_text:
+                key_parts.append((level, normalized_text))
+        return tuple(key_parts)
+
+    # Evidence that a missing top-level heading is a rename (not a delete):
+    # we can still map a heading-anchor comment for the same heading path.
+    initial_search_space = result[scope_start:scope_end]
+    renamed_top_level_paths: set = set()
+    for marker in markers:
+        marker_heading_path = marker.get("heading_path") or []
+        if not marker_heading_path or len(marker_heading_path) != 1:
+            continue
+        if int(marker_heading_path[-1].get("level") or 0) != 1:
+            continue
+        marker_left_context = str(marker.get("left_context") or "")
+        marker_right_context = str(marker.get("right_context") or "")
+        if not _context_indicates_heading_anchor(marker_left_context, marker_right_context):
+            continue
+
+        marker_old_start = int(marker.get("start", -1))
+        marker_preferred_index: Optional[int] = None
+        if marker_old_start >= 0:
+            marker_preferred_index = max(0, marker_old_start - old_scope_start)
+
+        candidate_span_rel = _pick_heading_span_by_level(
+            initial_search_space,
+            1,
+            marker_preferred_index,
+        )
+        if candidate_span_rel is None:
+            continue
+
+        candidate_start_rel, candidate_end_rel = candidate_span_rel
+        candidate_anchor = initial_search_space[candidate_start_rel:candidate_end_rel]
+        candidate_context_score = _score_occurrence_context(
+            initial_search_space,
+            candidate_anchor,
+            candidate_start_rel,
+            marker_left_context,
+            marker_right_context,
+        )
+        candidate_right_score = _common_prefix_len(
+            marker_right_context,
+            initial_search_space[candidate_end_rel:],
+        )
+        if candidate_context_score >= 16 and candidate_right_score >= _MIN_CONTEXT_FRAGMENT:
+            renamed_top_level_paths.add(_heading_path_key(marker_heading_path))
 
     def _commit_injection(span_start_abs: int, span_end_abs: int, wrapped: str) -> None:
         nonlocal result, scope_end, reanchored, accumulated_injection_delta
@@ -3233,9 +3576,11 @@ def _inject_inline_markers(
         accumulated_injection_delta += delta
         reanchored += 1
 
-    def _commit_top_orphan_marker(ref: str) -> None:
-        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-        _commit_injection(scope_start, scope_start, wrapped)
+    def _commit_top_orphan_marker(ref: str, count_deleted_icon: bool = True) -> None:
+        # Collect orphan refs for batch injection at the end
+        orphan_refs_to_batch.append(ref)
+        if count_deleted_icon:
+            orphan_refs_with_deleted_icon.add(ref)
 
     def _wrap_deleted_heading(
         ref: str,
@@ -3261,6 +3606,17 @@ def _inject_inline_markers(
         if heading_path:
             candidate_info = _pick_heading_candidate_from_path(search_space, heading_path)
             if candidate_info is None:
+                target_level = int(heading_path[-1].get("level") or 0) if heading_path else 0
+                has_next_same_level_in_old_context = bool(
+                    re.search(rf"<h{target_level}\b", str(right_context or ""), re.IGNORECASE)
+                ) if target_level > 0 else False
+                if has_next_same_level_in_old_context and len(heading_path or []) >= 2:
+                    parent_span_rel = _pick_heading_span_from_path(search_space, heading_path[:-1])
+                    if parent_span_rel is not None:
+                        parent_insert_abs = scope_start + int(parent_span_rel[1])
+                        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
+                        _commit_injection(parent_insert_abs, parent_insert_abs, wrapped)
+                        return True
                 _commit_top_orphan_marker(ref)
                 return True
 
@@ -3270,6 +3626,10 @@ def _inject_inline_markers(
                 or (match_kind == "ancestor_prefix" and best_depth >= 2 and best_depth == target_depth - 1)
             )
             if best_depth < target_depth and not should_use_nearest_surviving_heading:
+                target_level = int(heading_path[-1].get("level") or 0) if heading_path else 0
+                has_next_same_level_in_old_context = bool(
+                    re.search(rf"<h{target_level}\b", str(right_context or ""), re.IGNORECASE)
+                ) if target_level > 0 else False
                 insert_rel = _pick_deleted_heading_insertion_point(
                     search_space,
                     left_context,
@@ -3277,11 +3637,21 @@ def _inject_inline_markers(
                     heading_path=heading_path,
                 )
                 if insert_rel is None:
+                    if has_next_same_level_in_old_context and len(heading_path or []) >= 2:
+                        parent_span_rel = _pick_heading_span_from_path(search_space, heading_path[:-1])
+                        if parent_span_rel is not None:
+                            parent_insert_abs = scope_start + int(parent_span_rel[1])
+                            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
+                            _commit_injection(parent_insert_abs, parent_insert_abs, wrapped)
+                            return True
                     _commit_top_orphan_marker(ref)
                     return True
-                insert_abs = scope_start + insert_rel
-                wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-                _commit_injection(insert_abs, insert_abs, wrapped)
+                if has_next_same_level_in_old_context:
+                    insert_abs = scope_start + int(insert_rel)
+                    wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
+                    _commit_injection(insert_abs, insert_abs, wrapped)
+                else:
+                    _commit_top_orphan_marker(ref)
                 return True
 
         heading_span_rel = _pick_deleted_heading_anchor_span(
@@ -3316,7 +3686,15 @@ def _inject_inline_markers(
                 _commit_top_orphan_marker(ref)
                 return True
         wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
-        _commit_injection(span_start_abs, span_end_abs, wrapped)
+        # Check if this marker was originally an orphan (force_orphan flag)
+        # If so, route to batch collection to keep all orphans consolidated
+        marker_meta = markers_by_ref.get(ref, {})
+        if marker_meta.get("force_orphan"):
+            # Treat as orphan even if we found fallback text
+            _commit_top_orphan_marker(ref)
+        else:
+            # Normal re-anchored marker with fallback text
+            _commit_injection(span_start_abs, span_end_abs, wrapped)
         return True
 
     for m in markers:
@@ -3366,7 +3744,6 @@ def _inject_inline_markers(
                     continue
 
             _commit_top_orphan_marker(ref)
-            deleted_anchor_icon_count += 1
             continue
         if not anchor or not anchor.strip():
             skipped += 1
@@ -3392,6 +3769,9 @@ def _inject_inline_markers(
                 target_level = int(heading_path[-1].get("level") or 0)
                 heading_anchor_context = _context_indicates_heading_anchor(left_context, right_context)
                 if heading_anchor_context:
+                    if target_level == 1 and _heading_path_key(heading_path) not in renamed_top_level_paths:
+                        _commit_top_orphan_marker(ref, count_deleted_icon=False)
+                        continue
                     renamed_heading_span_rel = _pick_heading_span_by_level(search_space, target_level, preferred_index)
                     if renamed_heading_span_rel is not None:
                         span_start_rel, span_end_rel = renamed_heading_span_rel
@@ -3421,10 +3801,15 @@ def _inject_inline_markers(
                             continue
                 if not heading_anchor_context:
                     has_next_same_level_heading_in_old_context = bool(
-                        re.search(rf"<h{target_level}\\b", str(right_context or ""), re.IGNORECASE)
+                        re.search(rf"<h{target_level}\b", str(right_context or ""), re.IGNORECASE)
                     )
+                    allow_body_rebind_for_missing_h1 = True
+                    if target_level == 1:
+                        allow_body_rebind_for_missing_h1 = (
+                            _heading_path_key(heading_path) in renamed_top_level_paths
+                        )
                     branch_matches: List[Tuple[int, int, int, int, str]] = []
-                    if not has_next_same_level_heading_in_old_context:
+                    if not has_next_same_level_heading_in_old_context and allow_body_rebind_for_missing_h1:
                         for branch_start_rel, branch_end_rel in _iter_heading_branch_spans_by_level(search_space, target_level):
                             branch_search_space = search_space[branch_start_rel:branch_end_rel]
                             if not branch_search_space:
@@ -3508,8 +3893,10 @@ def _inject_inline_markers(
                                 wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{heading_content}</ac:inline-comment-marker>'
                                 _commit_injection(scope_start + heading_start, scope_start + heading_end, wrapped)
                                 continue
-
-                    _commit_top_orphan_marker(ref)
+                    if target_level == 1:
+                        _commit_top_orphan_marker(ref, count_deleted_icon=False)
+                    else:
+                        _commit_top_orphan_marker(ref, count_deleted_icon=False)
                     continue
                 # Single-level heading but no matches found - try to find by heading text
                 if heading_path and len(heading_path) > 0:
@@ -3523,7 +3910,10 @@ def _inject_inline_markers(
                             _commit_injection(scope_start + heading_start, scope_start + heading_end, wrapped)
                             continue
 
-                _commit_top_orphan_marker(ref)
+                if target_level == 1:
+                    _commit_top_orphan_marker(ref, count_deleted_icon=False)
+                else:
+                    _commit_top_orphan_marker(ref)
                 continue
             else:
                 # For multi-level heading paths (nested headings), try to preserve
@@ -3643,6 +4033,42 @@ def _inject_inline_markers(
             if max(left_len, right_len) < _MIN_CONTEXT_FRAGMENT:
                 if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
                     continue
+        # When exactly 1 occurrence is found but it has CROSSED a block boundary from the expected
+        # position (anchor word survived in a different paragraph after a local word replacement),
+        # the edited-span picker can locate the replacement word using the surrounding context.
+        # Only triggers when the occurrence jumped across a </p>/<li> boundary AND the edited-span
+        # has a better left-context score — preventing drift to a surviving copy in another paragraph.
+        if (
+            selected_index is not None
+            and len(occurrences) == 1
+            and preferred_index is not None
+        ):
+            low = min(preferred_index, selected_index)
+            high = max(preferred_index, selected_index)
+            between_text = search_space[low:high]
+            crosses_block = bool(
+                re.search(r'</p>|<li\b|</li>|</td>', between_text, re.IGNORECASE)
+            )
+            if crosses_block:
+                occ_left_score = _common_suffix_len(left_context, search_space[:selected_index])
+                edited_span_candidate = _pick_edited_context_span(
+                    search_space,
+                    left_context,
+                    right_context,
+                    preferred_index=preferred_index,
+                    original_anchor=anchor_used,
+                )
+                if edited_span_candidate is not None:
+                    alt_left_score = _common_suffix_len(left_context, search_space[:edited_span_candidate[0]])
+                    if alt_left_score > occ_left_score and _is_safe_wrap_span(
+                        search_space, edited_span_candidate[0], edited_span_candidate[1]
+                    ):
+                        span_start_abs = scope_start + edited_span_candidate[0]
+                        span_end_abs = scope_start + edited_span_candidate[1]
+                        fallback_anchor = search_space[edited_span_candidate[0]:edited_span_candidate[1]]
+                        wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
+                        _commit_injection(span_start_abs, span_end_abs, wrapped)
+                        continue
         if selected_index is None:
             # Only try edited-span picker if anchor genuinely doesn't exist (occurrences is empty).
             # If occurrences exist but context rejected them, skip to fallback handling.
@@ -3842,25 +4268,13 @@ def _inject_inline_markers(
         if occurrences and selected_index is None and preferred_index is not None:
             if section_span is not None and _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
                 continue
-            insert_rel = _find_deleted_icon_insertion_point(
-                search_space, preferred_index, left_context, right_context
-            )
-            insert_abs = scope_start + insert_rel
-            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-            _commit_injection(insert_abs, insert_abs, wrapped)
-            deleted_anchor_icon_count += 1
+            _commit_top_orphan_marker(ref)
             continue
 
         # If original anchor text was deleted entirely, preserve comment at the
         # original position using a visible icon placeholder at that location.
         if not occurrences and preferred_index is not None:
-            insert_rel = _find_deleted_icon_insertion_point(
-                search_space, preferred_index, left_context, right_context
-            )
-            insert_abs = scope_start + insert_rel
-            wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
-            _commit_injection(insert_abs, insert_abs, wrapped)
-            deleted_anchor_icon_count += 1
+            _commit_top_orphan_marker(ref)
             continue
 
         fallback_span = _pick_fallback_anchor_span(search_space, left_context, right_context)
@@ -3885,7 +4299,10 @@ def _inject_inline_markers(
                 span_start_abs = scope_start + span_start_rel
                 span_end_abs = span_start_abs
                 fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
-                deleted_anchor_icon_count += 1
+                # Route empty-anchor orphans to batch collection instead of immediate injection
+                # This ensures all orphans are consolidated at document top, not scattered
+                _commit_top_orphan_marker(ref)
+                continue
             else:
                 fallback_anchor = search_space[span_start_rel:span_end_rel]
         else:
@@ -3899,13 +4316,8 @@ def _inject_inline_markers(
                     if section_span is not None and preferred_index is not None:
                         if _wrap_deleted_heading(ref, left_context, preferred_index, heading_path):
                             continue
-                    insert_rel = _normalize_insertion_point_outside_tag(search_space, span_start_rel)
-                    span_start_rel = insert_rel
-                    span_end_rel = insert_rel
-                    span_start_abs = scope_start + span_start_rel
-                    span_end_abs = span_start_abs
-                    fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
-                    deleted_anchor_icon_count += 1
+                    _commit_top_orphan_marker(ref)
+                    continue
                 else:
                     fallback_anchor = search_space[span_start_rel:span_end_rel]
             else:
@@ -3913,15 +4325,26 @@ def _inject_inline_markers(
                     insert_rel = _normalize_insertion_point_outside_tag(search_space, preferred_index)
                 else:
                     insert_rel = _normalize_insertion_point_outside_tag(search_space, span_start_rel)
-                span_start_rel = insert_rel
-                span_end_rel = insert_rel
-                span_start_abs = scope_start + span_start_rel
-                span_end_abs = span_start_abs
-                fallback_anchor = _ORPHAN_COMMENT_EMPTY_ANCHOR_HTML
-                deleted_anchor_icon_count += 1
+                _commit_top_orphan_marker(ref)
+                continue
 
         wrapped = f'<ac:inline-comment-marker ac:ref="{ref}">{fallback_anchor}</ac:inline-comment-marker>'
         _commit_injection(span_start_abs, span_end_abs, wrapped)
+
+    # Batch inject all orphan markers at document top (single consolidated empty space)
+    if orphan_refs_to_batch:
+        # Create consolidated orphan marker block - all refs share ONE empty space location
+        orphan_block = "".join([
+            f'<ac:inline-comment-marker ac:ref="{ref}">{_ORPHAN_COMMENT_EMPTY_ANCHOR_HTML}</ac:inline-comment-marker>'
+            for ref in reversed(orphan_refs_to_batch)
+        ])
+        # Inject all orphans at document start in ONE operation
+        _commit_injection(scope_start, scope_start, orphan_block)
+        deleted_anchor_icon_count += len(orphan_refs_with_deleted_icon)
+        # Count each orphaned comment as preserved/reanchored even though insertion is batched.
+        if len(orphan_refs_to_batch) > 1:
+            reanchored += len(orphan_refs_to_batch) - 1
+
     return result, reanchored, skipped, deleted_anchor_icon_count
 
 
@@ -4753,8 +5176,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-prompt-override", action="store_true", help="Do not prompt for override in compare-only runs")
     parser.add_argument(
         "--allow-full-page-fallback",
-        action="store_true",
-        help="Allow auto/guard logic to fall back to full-page overwrite when section-safe publish is not possible",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Allow auto/guard logic to fall back to full-page overwrite when section-safe publish is not possible "
+            "(default: enabled). Use --no-allow-full-page-fallback to enforce strict section-only behavior."
+        ),
     )
     parser.add_argument(
         "--require-visible-inline-markers",
@@ -4770,6 +5197,16 @@ def parse_args() -> argparse.Namespace:
         "--require-low-risk-reanchor",
         action="store_true",
         help="Fail with a non-zero exit code if risk_assessment marks manual review required.",
+    )
+    parser.add_argument(
+        "--orphan-context-reply",
+        action="store_true",
+        help="Post an informational reply on orphaned comments showing their original heading hierarchy.",
+    )
+    parser.add_argument(
+        "--fast-preserve-only",
+        action="store_true",
+        help="Skip compare guard, risk assessment, and report generation. Only preserve comments (fastest mode).",
     )
 
     parser.add_argument("--reflect-on-page", action="store_true", help="Enable temporary on-page visual diff reflection")
@@ -4798,6 +5235,7 @@ def main() -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     args = parse_args()
+    fast_mode = bool(getattr(args, "fast_preserve_only", False))
 
     if not os.path.exists(args.guard_script):
         raise SystemExit(f"Guard script not found: {args.guard_script}")
@@ -4807,9 +5245,11 @@ def main() -> int:
         raise SystemExit(f"Markdown file not found: {resolved_md_path}")
 
     config_module = _load_config_module(args.project_root)
+    page_info_cached_before_overwrite: Optional[Dict[str, Any]] = None
     requested_heading_title = str(args.heading_title or "").strip()
     if requested_heading_title.lower() == "auto":
         page_info_for_resolution = _fetch_page_storage_with_auth(args, config_module)
+        page_info_cached_before_overwrite = page_info_for_resolution
         anchor_region_available = bool(
             _find_anchor_region_span(
                 page_info_for_resolution["storage_html"],
@@ -4817,6 +5257,12 @@ def main() -> int:
                 args.anchor_end_name,
             )
         )
+        if bool(args.allow_full_page_fallback):
+            print(
+                "[target-mode] Managed anchor-region mode active: ignoring --allow-full-page-fallback "
+                "to prevent full-page overwrite."
+            )
+        args.allow_full_page_fallback = False
         baseline_payload = _load_auto_heading_baseline(args.output_dir, args.page_id, resolved_md_path, args.split_level)
         marker = _fetch_publish_marker_with_auth(args, config_module)
         baseline_markdown = None
@@ -4846,6 +5292,16 @@ def main() -> int:
             baseline_markdown=baseline_markdown,
             baseline_sections_by_title=baseline_sections_by_title,
         )
+
+        concrete_changed_titles = [
+            title
+            for title in changed_titles
+            if str(title or "").strip() and title != _FULL_PAGE_AUTO_SENTINEL
+        ]
+        if len(concrete_changed_titles) > 1 and not bool(args.allow_full_page_fallback):
+            # Prefer explicit per-heading runs over broad fallback so auto mode stays section-local.
+            return _run_multi_heading_publish(args, concrete_changed_titles)
+
         args.heading_title = _select_auto_publish_target(
             changed_titles,
             allow_full_page_fallback=bool(args.allow_full_page_fallback),
@@ -4888,7 +5344,7 @@ def main() -> int:
     supplemented = 0
     if args.apply and open_ref_ids:
         try:
-            page_info_before = _fetch_page_storage_with_auth(args, config_module)
+            page_info_before = page_info_cached_before_overwrite or _fetch_page_storage_with_auth(args, config_module)
             storage_before = page_info_before["storage_html"]
             old_markers_all = _extract_inline_markers(storage_before)
             section_span_before = _find_target_storage_span(
@@ -4969,16 +5425,20 @@ def main() -> int:
                     print(
                         f"[anchor-preserve] Reconciled {reconciled} marker(s) from inline comment metadata."
                     )
-                old_markers, history_enriched = _enrich_markers_from_history(
-                    args.output_dir,
-                    args.page_id,
-                    args.heading_title,
-                    old_markers,
-                )
-                if history_enriched:
-                    print(
-                        f"[anchor-preserve] Refined {history_enriched} marker(s) from historical compare artifacts."
+                # Skip historical enrichment in fast mode
+                if not getattr(args, "fast_preserve_only", False):
+                    old_markers, history_enriched = _enrich_markers_from_history(
+                        args.output_dir,
+                        args.page_id,
+                        args.heading_title,
+                        old_markers,
                     )
+                    if history_enriched:
+                        print(
+                            f"[anchor-preserve] Refined {history_enriched} marker(s) from historical compare artifacts."
+                        )
+                else:
+                    history_enriched = 0
             old_markers, orphan_seeded = _seed_missing_orphan_markers(old_markers, before_inline_props)
             supplemented += orphan_seeded
             if orphan_seeded:
@@ -5003,18 +5463,30 @@ def main() -> int:
             print(f"[anchor-preserve] Warning: could not fetch page storage before overwrite: {exc}")
 
     before_comment_marker_map = _build_comment_marker_map(active_comments_before, before_inline_props)
-    _save_json(
-        before_comments_path,
-        {
-            "auth_method": auth_method,
-            "all_comments": all_comments_before,
-            "active_only": active_comments_before,
-            "inline_marker_map": before_comment_marker_map,
-        },
-    )
+    # Skip saving before comments in fast mode
+    if not fast_mode:
+        _save_json(
+            before_comments_path,
+            {
+                "auth_method": auth_method,
+                "all_comments": all_comments_before,
+                "active_only": active_comments_before,
+                "inline_marker_map": before_comment_marker_map,
+            },
+        )
 
+    # Fast mode still needs the guard apply step because that is the current
+    # overwrite path. What we skip here is downstream compare consumption,
+    # report generation, risk assessment, and other post-processing.
     guard_command = _build_guard_command(args, guard_output_json)
-    _run_guard_command(guard_command)
+    if fast_mode:
+        if args.apply:
+            print("[source] ⚡ Fast mode: Running overwrite publish, skipping final compare processing, HTML report, and risk assessment.")
+            _run_guard_command(guard_command)
+        else:
+            print("[source] ⚡ Fast mode: Skipping compare guard, HTML report, and risk assessment.")
+    else:
+        _run_guard_command(guard_command)
 
     # Re-inject inline markers after overwrite so comments stay open and viewable
     reanchor_result: Dict[str, Any] = {"status": "skipped"}
@@ -5054,9 +5526,9 @@ def main() -> int:
     }
     payload_storage_html = str(reanchor_result.get("payload_storage_html") or "")
     payload_section_html = str(reanchor_result.get("payload_section_html") or "")
-    if payload_storage_html:
+    if payload_storage_html and not fast_mode:
         _save_text(reanchor_payload_storage_path, payload_storage_html)
-    if payload_section_html:
+    if payload_section_html and not fast_mode:
         _save_text(reanchor_payload_section_path, payload_section_html)
         reinjection_payload_audit["status"] = "payload-captured"
         try:
@@ -5086,12 +5558,14 @@ def main() -> int:
         except Exception as exc:
             reinjection_payload_audit["status"] = "error"
             reinjection_payload_audit["error"] = str(exc)
+    elif payload_section_html and fast_mode:
+        reinjection_payload_audit["status"] = "skipped-fast-mode"
 
     all_comments_after: List[Dict[str, Any]] = all_comments_before
     active_comments_after: List[Dict[str, Any]] = active_comments_before
     if args.apply:
         auth_method_after, all_comments_after, active_comments_after = _fetch_comments_with_fallback_auth(args, config_module)
-        if active_comments_after:
+        if active_comments_after and not fast_mode:
             after_inline_props = _fetch_inline_properties_with_fallback_auth(
                 args,
                 config_module,
@@ -5100,7 +5574,7 @@ def main() -> int:
     else:
         after_inline_props = list(before_inline_props)
 
-    compare_result = _load_json(guard_output_json)
+    compare_result = ({ } if fast_mode else _load_json(guard_output_json))
     delta = _build_comment_delta(active_comments_before, active_comments_after, all_comments_before, all_comments_after)
 
     # Build active/resolved comment audits for preserved comments.
@@ -5115,23 +5589,40 @@ def main() -> int:
         delta.get("resolved_preserved_ids", []),
     )
 
-    inline_visibility = _build_inline_visibility_audit(
-        args,
-        config_module,
-        args.heading_title,
-        args.split_level,
-        recoverable_marker_count=len(old_markers),
-        active_comment_count=delta.get("before_active_count", 0),
-        supplemented_marker_count=supplemented,
-    )
-    storage_anchor_audit = _build_storage_anchor_audit(
-        args,
-        config_module,
-        args.heading_title,
-        args.split_level,
-        old_markers,
-        section_span_before if 'section_span_before' in locals() else None,
-    )
+    if fast_mode and not args.require_visible_inline_markers:
+        recoverable_marker_count = len({str(marker.get("ref") or "") for marker in old_markers if str(marker.get("ref") or "")})
+        skipped_marker_count = int(reanchor_result.get("skipped") or 0)
+        visible_marker_count = max(0, recoverable_marker_count - skipped_marker_count)
+        inline_visibility = {
+            "status": "skipped-fast-mode",
+            "recoverable_marker_count": recoverable_marker_count,
+            "visible_marker_count": visible_marker_count,
+            "visible_marker_refs": [],
+            "supplemented_marker_count": supplemented,
+        }
+        storage_anchor_audit = {
+            "status": "skipped-fast-mode",
+            "recoverable_marker_count": recoverable_marker_count,
+            "details": [],
+        }
+    else:
+        inline_visibility = _build_inline_visibility_audit(
+            args,
+            config_module,
+            args.heading_title,
+            args.split_level,
+            recoverable_marker_count=len(old_markers),
+            active_comment_count=delta.get("before_active_count", 0),
+            supplemented_marker_count=supplemented,
+        )
+        storage_anchor_audit = _build_storage_anchor_audit(
+            args,
+            config_module,
+            args.heading_title,
+            args.split_level,
+            old_markers,
+            section_span_before if 'section_span_before' in locals() else None,
+        )
     marker_details_by_ref = {
         str(detail.get("ref") or ""): detail
         for detail in storage_anchor_audit.get("details", [])
@@ -5155,27 +5646,28 @@ def main() -> int:
         visible_refs=visible_refs,
     )
 
-    if args.apply:
-        _save_json(
-            after_comments_path,
-            {
-                "auth_method": auth_method_after,
-                "all_comments": all_comments_after,
-                "active_only": active_comments_after,
-                "inline_marker_map": after_comment_marker_map,
-            },
-        )
-    else:
-        _save_json(
-            after_comments_path,
-            {
-                "auth_method": auth_method,
-                "all_comments": all_comments_before,
-                "active_only": active_comments_before,
-                "inline_marker_map": after_comment_marker_map,
-                "note": "Apply not executed; after snapshot equals before snapshot.",
-            },
-        )
+    if not fast_mode:
+        if args.apply:
+            _save_json(
+                after_comments_path,
+                {
+                    "auth_method": auth_method_after,
+                    "all_comments": all_comments_after,
+                    "active_only": active_comments_after,
+                    "inline_marker_map": after_comment_marker_map,
+                },
+            )
+        else:
+            _save_json(
+                after_comments_path,
+                {
+                    "auth_method": auth_method,
+                    "all_comments": all_comments_before,
+                    "active_only": active_comments_before,
+                    "inline_marker_map": after_comment_marker_map,
+                    "note": "Apply not executed; after snapshot equals before snapshot.",
+                },
+            )
 
     inline_visibility_gap = False
 
@@ -5205,20 +5697,59 @@ def main() -> int:
         inline_visibility_gap = True
     elif delta.get("active_auto_resolved_count", 0) > 0:
         recommendation_status = "warning-auto-resolved"
-        recommendation_message = f"{delta['active_auto_resolved_count']} open comment(s) were auto-resolved during overwrite (anchor text was changed/removed). Review the auto_resolved_preview in the report."
+        if fast_mode:
+            recommendation_message = (
+                f"{delta['active_auto_resolved_count']} open comment(s) were auto-resolved during overwrite "
+                "(anchor text was changed/removed)."
+            )
+        else:
+            recommendation_message = f"{delta['active_auto_resolved_count']} open comment(s) were auto-resolved during overwrite (anchor text was changed/removed). Review the auto_resolved_preview in the report."
     elif delta.get("active_missing_count", 0) == 0:
         recommendation_status = "ok"
         recommendation_message = "All open comments were preserved after overwrite."
     else:
         recommendation_status = "review-required"
-        recommendation_message = "Some open comments are missing after overwrite; use compare report and missing preview for manual re-anchor."
+        if fast_mode:
+            recommendation_message = "Some open comments are missing after overwrite; manual review is recommended."
+        else:
+            recommendation_message = "Some open comments are missing after overwrite; use compare report and missing preview for manual re-anchor."
 
-    risk_assessment = _build_risk_assessment(
-        delta,
-        storage_anchor_audit,
-        inline_visibility,
-        recommendation_status,
-    )
+    # Skip risk assessment in fast mode
+    if fast_mode:
+        risk_assessment = {
+            "risk_level": "low",
+            "manual_review_required": False,
+            "reasons": ["Fast mode: risk assessment skipped"],
+            "signals": {},
+        }
+    else:
+        risk_assessment = _build_risk_assessment(
+            delta,
+            storage_anchor_audit,
+            inline_visibility,
+            recommendation_status,
+        )
+    orphan_context_targets = []
+    if not fast_mode:
+        orphan_context_targets = _build_orphan_context_targets(
+            storage_anchor_audit,
+            before_inline_props,
+            old_markers,
+            args.heading_title,
+        )
+    # Skip orphan context replies in fast mode
+    if fast_mode:
+        orphan_context_replies = {
+            "enabled": False,
+            "status": "skipped-fast-mode",
+            "candidate_count": 0,
+            "posted_count": 0,
+            "skipped_existing_count": 0,
+            "failed_count": 0,
+            "details": [],
+        }
+    else:
+        orphan_context_replies = _post_orphan_context_replies(args, config_module, orphan_context_targets)
     reanchor_conflict_telemetry = _build_reanchor_conflict_telemetry(reanchor_result)
     if recommendation_status == "ok" and bool(risk_assessment.get("manual_review_required")):
         recommendation_status = "warning-manual-review-required"
@@ -5227,50 +5758,52 @@ def main() -> int:
             "Review storage_anchor_audit and risk_assessment before production sign-off."
         )
 
-    report = {
-        "schemaVersion": "1.0",
-        "generatedAt": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "inputs": {
-            "page_id": args.page_id,
-            "heading_title": args.heading_title,
-            "base_url": args.base_url,
-            "md_path": resolved_md_path,
-            "apply": bool(args.apply),
-            "compare_mode": args.compare_mode,
-            "split_level": args.split_level,
-            "allow_reanchor_conflict_retry": bool(args.allow_reanchor_conflict_retry),
-            "require_low_risk_reanchor": bool(args.require_low_risk_reanchor),
-        },
-        "guard": _extract_compare_snapshot(compare_result),
-        "comment_preservation": delta,
-        "position_audit": audit_summary,
-        "storage_anchor_audit": storage_anchor_audit,
-        "reinjection_payload_audit": reinjection_payload_audit,
-        "resolved_position_audit": resolved_audit_summary,
-        "inline_visibility": inline_visibility,
-        "comment_marker_map": {
-            "before": before_comment_marker_map,
-            "after": after_comment_marker_map,
-        },
-        "anchor_reinjection": reanchor_result,
-        "reanchor_conflict_telemetry": reanchor_conflict_telemetry,
-        "artifacts": {
-            "comments_before": os.path.abspath(before_comments_path),
-            "comments_after": os.path.abspath(after_comments_path),
-            "compare_guard_json": os.path.abspath(guard_output_json),
-            "reanchor_payload_storage": os.path.abspath(reanchor_payload_storage_path) if os.path.exists(reanchor_payload_storage_path) else None,
-            "saved_storage_after_reanchor": os.path.abspath(saved_storage_after_reanchor_path) if os.path.exists(saved_storage_after_reanchor_path) else None,
-            "reanchor_payload_section": os.path.abspath(reanchor_payload_section_path) if os.path.exists(reanchor_payload_section_path) else None,
-            "saved_section_after_reanchor": os.path.abspath(saved_section_after_reanchor_path) if os.path.exists(saved_section_after_reanchor_path) else None,
-        },
-        "recommendation": {
-            "status": recommendation_status,
-            "message": recommendation_message,
-        },
-        "risk_assessment": risk_assessment,
-    }
-
-    _save_json(final_report_json, report)
+    if not fast_mode:
+        report = {
+            "schemaVersion": "1.0",
+            "generatedAt": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "inputs": {
+                "page_id": args.page_id,
+                "heading_title": args.heading_title,
+                "base_url": args.base_url,
+                "md_path": resolved_md_path,
+                "apply": bool(args.apply),
+                "compare_mode": args.compare_mode,
+                "split_level": args.split_level,
+                "allow_reanchor_conflict_retry": bool(args.allow_reanchor_conflict_retry),
+                "require_low_risk_reanchor": bool(args.require_low_risk_reanchor),
+                "orphan_context_reply": bool(args.orphan_context_reply),
+            },
+            "guard": _extract_compare_snapshot(compare_result),
+            "comment_preservation": delta,
+            "position_audit": audit_summary,
+            "storage_anchor_audit": storage_anchor_audit,
+            "reinjection_payload_audit": reinjection_payload_audit,
+            "resolved_position_audit": resolved_audit_summary,
+            "inline_visibility": inline_visibility,
+            "comment_marker_map": {
+                "before": before_comment_marker_map,
+                "after": after_comment_marker_map,
+            },
+            "orphan_context_replies": orphan_context_replies,
+            "anchor_reinjection": reanchor_result,
+            "reanchor_conflict_telemetry": reanchor_conflict_telemetry,
+            "artifacts": {
+                "comments_before": os.path.abspath(before_comments_path),
+                "comments_after": os.path.abspath(after_comments_path),
+                "compare_guard_json": os.path.abspath(guard_output_json),
+                "reanchor_payload_storage": os.path.abspath(reanchor_payload_storage_path) if os.path.exists(reanchor_payload_storage_path) else None,
+                "saved_storage_after_reanchor": os.path.abspath(saved_storage_after_reanchor_path) if os.path.exists(saved_storage_after_reanchor_path) else None,
+                "reanchor_payload_section": os.path.abspath(reanchor_payload_section_path) if os.path.exists(reanchor_payload_section_path) else None,
+                "saved_section_after_reanchor": os.path.abspath(saved_section_after_reanchor_path) if os.path.exists(saved_section_after_reanchor_path) else None,
+            },
+            "recommendation": {
+                "status": recommendation_status,
+                "message": recommendation_message,
+            },
+            "risk_assessment": risk_assessment,
+        }
+        _save_json(final_report_json, report)
 
     if args.apply:
         try:
@@ -5285,7 +5818,10 @@ def main() -> int:
         except Exception as exc:
             print(f"[source] Warning: could not update local auto-heading baseline: {exc}")
 
-    print(f"REPORT_PATH={os.path.abspath(final_report_json)}")
+    if fast_mode:
+        print("REPORT_PATH=SKIPPED_FAST_MODE")
+    else:
+        print(f"REPORT_PATH={os.path.abspath(final_report_json)}")
     print()
     print("=== ACTIVE COMMENTS ===")
     print(f"ACTIVE_COMMENTS_BEFORE={delta['before_active_count']}")
@@ -5317,6 +5853,14 @@ def main() -> int:
     print(f"REANCHOR_STATUS={reanchor_conflict_telemetry['reanchor_status']}")
     print(f"REANCHOR_UPDATE_STATUS={reanchor_conflict_telemetry['update_status']}")
     print(f"REANCHOR_CONFLICT_DETECTED={str(bool(reanchor_conflict_telemetry['conflict_detected'])).lower()}")
+    if args.orphan_context_reply:
+        print()
+        print("=== ORPHAN CONTEXT REPLIES ===")
+        print(f"ORPHAN_CONTEXT_REPLY_STATUS={orphan_context_replies.get('status', '')}")
+        print(f"ORPHAN_CONTEXT_REPLY_CANDIDATES={orphan_context_replies.get('candidate_count', 0)}")
+        print(f"ORPHAN_CONTEXT_REPLY_POSTED={orphan_context_replies.get('posted_count', 0)}")
+        print(f"ORPHAN_CONTEXT_REPLY_SKIPPED_EXISTING={orphan_context_replies.get('skipped_existing_count', 0)}")
+        print(f"ORPHAN_CONTEXT_REPLY_FAILED={orphan_context_replies.get('failed_count', 0)}")
 
     if args.require_low_risk_reanchor and bool(risk_assessment.get("manual_review_required")):
         print()
