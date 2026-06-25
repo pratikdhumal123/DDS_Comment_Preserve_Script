@@ -40,6 +40,36 @@ def _bundled_clone_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "standalone_clone"))
 
 
+def _default_md_input_dir() -> str:
+    return os.path.join(_bundled_clone_root(), "input")
+
+
+def _resolve_md_path(md_path: Optional[str]) -> str:
+    if md_path:
+        return os.path.abspath(md_path)
+
+    input_dir = _default_md_input_dir()
+    if not os.path.isdir(input_dir):
+        raise SystemExit(
+            "Markdown path not provided and default input directory was not found: "
+            f"{input_dir}. Pass --md-path explicitly."
+        )
+
+    md_candidates = [
+        os.path.join(input_dir, name)
+        for name in os.listdir(input_dir)
+        if os.path.isfile(os.path.join(input_dir, name)) and name.lower().endswith(".md")
+    ]
+    if not md_candidates:
+        raise SystemExit(
+            "Markdown path not provided and no .md files were found in default input directory: "
+            f"{input_dir}. Pass --md-path explicitly."
+        )
+
+    md_candidates.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return os.path.abspath(md_candidates[0])
+
+
 def _load_config_module(project_root: Optional[str]) -> Any:
     if not project_root:
         return None
@@ -5158,7 +5188,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--base-url", required=True, help="Confluence/SCDP base URL, e.g. https://scdp-dev.cisco.com/conf")
     parser.add_argument("--page-id", required=True, help="SCDP Confluence page ID")
-    parser.add_argument("--md-path", required=True, help="Markdown file used by Doc Engine publish")
+    parser.add_argument(
+        "--md-path",
+        default=None,
+        help=(
+            "Markdown file used by Doc Engine publish. If omitted, the newest .md file under "
+            f"{_default_md_input_dir()} is used."
+        ),
+    )
     parser.add_argument(
         "--heading-title",
         required=True,
@@ -5240,9 +5277,10 @@ def main() -> int:
     if not os.path.exists(args.guard_script):
         raise SystemExit(f"Guard script not found: {args.guard_script}")
 
-    resolved_md_path = os.path.abspath(args.md_path)
+    resolved_md_path = _resolve_md_path(args.md_path)
     if not os.path.exists(resolved_md_path):
         raise SystemExit(f"Markdown file not found: {resolved_md_path}")
+    args.md_path = resolved_md_path
 
     config_module = _load_config_module(args.project_root)
     page_info_cached_before_overwrite: Optional[Dict[str, Any]] = None
